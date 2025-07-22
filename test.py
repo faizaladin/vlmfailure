@@ -15,8 +15,7 @@ init_image = load_image("frame_0000.png")
 prompt = "Make this image more photorealistic"
 
 # pass prompt and image to pipeline
-image = pipeline(prompt, image=init_image).images[0]
-make_image_grid([init_image, image], rows=1, cols=2)
+image = pipeline(prompt, image=init_image, strength=0.3).images[0]
 
 # save the generated image
 image.save("output.png")

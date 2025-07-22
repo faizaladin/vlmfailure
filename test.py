@@ -1,16 +1,19 @@
+import requests
 import torch
-from diffusers import AutoPipelineForImage2Image
-from diffusers.utils import load_image, make_image_grid
+from PIL import Image
+from io import BytesIO
 
-pipeline = AutoPipelineForImage2Image.from_pretrained(
-    "kandinsky-community/kandinsky-2-2-decoder", torch_dtype=torch.float16, use_safetensors=True
-)
-pipeline.enable_model_cpu_offload()
-# remove following line if xFormers is not installed or you have PyTorch 2.0 or higher installed
-pipeline.enable_xformers_memory_efficient_attention()
+from diffusers import StableDiffusionImg2ImgPipeline
 
-init_image = load_image("frame_0000.png").convert("RGB")
+device = "cuda"
+model_id_or_path = "stable-diffusion-v1-5/stable-diffusion-v1-5"
+pipe = StableDiffusionImg2ImgPipeline.from_pretrained(model_id_or_path, torch_dtype=torch.float16)
+pipe = pipe.to(device)
 
-prompt = "Car driving on a road. 4k"
-image = pipeline(prompt, image=init_image).images[0]
-image.save("output.png")
+init_image = Image.open("frame_0000.png").convert("RGB")
+init_image = init_image.resize((768, 512))
+
+prompt = "A car driving on a road in first person POV, 4k"
+
+images = pipe(prompt=prompt, image=init_image, strength=0.75, guidance_scale=7.5).images
+images[0].save("car_driving.png")

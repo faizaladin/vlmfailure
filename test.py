@@ -9,7 +9,7 @@ pipeline.enable_model_cpu_offload()
 # remove following line if xFormers is not installed or you have PyTorch 2.0 or higher installed
 pipeline.enable_xformers_memory_efficient_attention()
 
-init_image = load_image("frame_0000.png")
+init_image = load_image("frame_0000.png").convert("RGB")
 
 prompt = "Car driving on a road. 4k"
 image = pipeline(prompt, image=init_image).images[0]

@@ -5,7 +5,7 @@ from diffusers.utils import load_image
 pipe = FluxKontextPipeline.from_pretrained("black-forest-labs/FLUX.1-Kontext-dev", torch_dtype=torch.bfloat16)
 pipe.to("cuda")
 
-input_image = load_image("https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/diffusers/cat.png")
+input_image = load_image("frame_0000.png")
 
 image = pipe(
   image=input_image,

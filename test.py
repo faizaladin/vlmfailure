@@ -9,6 +9,6 @@ input_image = load_image("frame_0000.png")
 
 image = pipe(
   image=input_image,
-  prompt="Add a hat to the cat",
+  prompt="Make this image more photorealistic",
   guidance_scale=2.5
 ).images[0]

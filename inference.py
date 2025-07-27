@@ -13,7 +13,7 @@ conversation = [
         "role": "user",
         "content": [
             {"type": "image", "image": image},
-            {"type": "text", "text": "What is shown in this image?"},
+            {"type": "text", "text": "This is an image taken by a car using a vision based algorithm to steer. Is there a cause of failure in this image, and if so what is the cause of failure? Please give a yes or no answer followed by reasoning specific to the image and pertains to the weather condition. Create a list of these failures and provide bullet points of reasoning for each one. Lastly, see if there are similar failures that could arise in different weather conditions."},
         ],
     },
 ]

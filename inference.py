@@ -5,14 +5,16 @@ from PIL import Image
 # Load the model in half-precision
 model = LlavaForConditionalGeneration.from_pretrained("llava-hf/llava-1.5-7b-hf", torch_dtype=torch.float16, device_map="auto")
 processor = AutoProcessor.from_pretrained("llava-hf/llava-1.5-7b-hf")
-image = Image.open("paired_fail_4k.png")
+image1 = Image.open("paired_fail_4k.png")
+image2 = Image.open("success_fail_4k.png")
 
 
 conversation = [
     {
         "role": "user",
         "content": [
-            {"type": "image", "image": image},
+            {"type": "image", "image": image1},
+            {"type": "image", "image": image2},
             {"type": "text", "text": "This is a paired image of two cars using a vision based algorithm to steer under different weather conditions. Is there a cause of failure in this image, and if so what is the cause of failure? Please give a yes or no answer followed by reasoning specific to the image and pertains to the weather condition. Create a list of these failures and provide bullet points of reasoning for each one. Lastly, see if there are similar failures that could arise in different weather conditions."},
         ],
     },

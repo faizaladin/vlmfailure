@@ -11,7 +11,7 @@ dataset = "llava_finetune.json"
 
 # Custom Dataset for loading JSON data
 class LlavaJsonDataset(Dataset):
-    def __init__(self, json_path, processor, max_length=128):
+    def __init__(self, json_path, processor, max_length=64):
         with open(json_path, 'r') as f:
             self.data = json.load(f)
         self.processor = processor
@@ -55,17 +55,13 @@ def prepare_model_with_lora(model):
 # Training setup
 def label_from_text(text):
     import re
-    print(f"Prompt for labeling: {text}")
     text_lower = text.strip().lower()
     # Match 'yes' or 'no' as a whole word, possibly followed by punctuation
     if re.search(r'\byes\b[\.,!?:;]?', text_lower):
-        print("Label assigned: 1 (yes)")
         return 1
     elif re.search(r'\bno\b[\.,!?:;]?', text_lower):
-        print("Label assigned: 0 (no)")
         return 0
     else:
-        print("Label assigned: 0 (default, neither yes nor no found)")
         return 0
 
 class LlavaJsonClassificationDataset(Dataset):
@@ -121,7 +117,7 @@ def main():
         num_train_epochs=3,
         per_device_train_batch_size=1,
         per_device_eval_batch_size=1,
-        gradient_accumulation_steps=2,
+        gradient_accumulation_steps=8,
         save_strategy="epoch",
         logging_dir="./logs",
         learning_rate=2e-4,

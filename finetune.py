@@ -11,7 +11,7 @@ dataset = "llava_finetune.json"
 
 # Custom Dataset for loading JSON data
 class LlavaJsonDataset(Dataset):
-    def __init__(self, json_path, processor, max_length=64):
+    def __init__(self, json_path, processor, max_length=128):
         with open(json_path, 'r') as f:
             self.data = json.load(f)
         self.processor = processor
@@ -121,7 +121,7 @@ def main():
         save_strategy="epoch",
         logging_dir="./logs",
         learning_rate=2e-4,
-        fp16=True,
+        bf16=True,  # Use bfloat16 mixed precision if supported
         report_to="none"
     )
 

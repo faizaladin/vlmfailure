@@ -97,7 +97,7 @@ class LlavaJsonClassificationDataset(Dataset):
             return_tensors="pt"
         )
         processed = {k: v.squeeze(0) for k, v in processed.items()}
-        processed['labels'] = torch.tensor(label, dtype=torch.long)
+        processed['labels'] = processed['input_ids'].clone()
         return processed
 
 def main():

@@ -63,9 +63,10 @@ train_dataset = LlavaFinetuneDataset(train_data, processor)
 val_dataset = LlavaFinetuneDataset(val_data, processor)
 
 # Function to get image embedding from LLaVA vision tower
-def get_embedding(image_path):
+def get_embedding(image_path, prompt):
     image = Image.open(image_path).convert("RGB")
-    inputs = processor(images=image, return_tensors="pt").to(model.device, torch.float16)
+    # Pass a dummy text input along with the image
+    inputs = processor(images=image, text=prompt, return_tensors="pt").to(model.device, torch.float16)
     with torch.no_grad():
         vision_outputs = model.vision_tower(**inputs)
         emb = vision_outputs.last_hidden_state.mean(dim=1).squeeze().cpu().numpy()
@@ -91,20 +92,21 @@ def get_llava_answer(image_path, prompt):
         return_tensors="pt"
     ).to(model.device, torch.float16)
     with torch.no_grad():
-        generate_ids = model.generate(**inputs, max_new_tokens=50)
+        generate_ids = model.generate(**inputs, max_new_tokens=1000)
     output = processor.batch_decode(generate_ids, skip_special_tokens=True)[0]
     return output
+
 
 # Step 1: Embed all images and separate by label
 failure_embeddings = []
 success_embeddings = []
 failure_paths = []
 success_paths = []
-prompt = data[0]["prompt"] if "prompt" in data[0] else ""
 for entry in data:
     img_path = entry["image"]
     label = entry["label"]
-    emb = get_embedding(img_path)
+    prompt = entry["prompt"]
+    emb = get_embedding(img_path, prompt)
     if label == 0:
         failure_embeddings.append(emb)
         failure_paths.append(img_path)
@@ -181,7 +183,8 @@ class CustomTrainer(Trainer):
             # (Assumes batch size 1 for simplicity)
             img_idx = self.train_dataset.indices[i] if hasattr(self.train_dataset, 'indices') else i
             img_path = self.train_dataset.data[img_idx]["image"]
-            emb = get_embedding(img_path)
+            prompt = self.train_dataset.data[img_idx]["prompt"]
+            emb = get_embedding(img_path, prompt)
             batch_embs.append(emb)
         batch_embs = np.stack(batch_embs)
         # Custom loss: for misclassified successes, use min distance to failure set

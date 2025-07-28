@@ -12,7 +12,6 @@ processor = AutoProcessor.from_pretrained(model_dir)
 # Load base model
 base_model = LlavaForConditionalGeneration.from_pretrained("llava-hf/llava-1.5-7b-hf")
 
-
 # Load LoRA weights
 model = PeftModel.from_pretrained(base_model, model_dir)
 
@@ -24,7 +23,6 @@ model = model.to(device)
 # Now use `model` and `processor` for inference
 image = Image.open("paired_frames/pos_-2.7755575615628914e-16_head_29/frame_00013.png")
 
-
 conversation = [
     {
         "role": "user",
@@ -34,7 +32,6 @@ conversation = [
         ],
     },
 ]
-
 
 # Prepare inputs and move to the same device as model
 inputs = processor.apply_chat_template(
@@ -53,6 +50,6 @@ for k, v in inputs.items():
             inputs[k] = v.to(device)
 
 # Generate
-generate_ids = model.generate(**inputs, max_new_tokens=50)
+generate_ids = model.generate(**inputs, max_new_tokens=1000)
 output = processor.batch_decode(generate_ids, skip_special_tokens=True)
 print(output)

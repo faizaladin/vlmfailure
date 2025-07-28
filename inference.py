@@ -4,7 +4,7 @@ from PIL import Image
 
 # Load the model in half-precision
 model = LlavaForConditionalGeneration.from_pretrained("./finetuned_llava", torch_dtype=torch.float16)
-processor = AutoProcessor.from_pretrained("./finetuned_llava")
+processor = AutoProcessor.from_pretrained("./finetuned_llava", use_fast=True)
 image = Image.open("paired_frames/pos_-2.7755575615628914e-16_head_29/frame_00013.png")
 
 

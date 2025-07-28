@@ -18,9 +18,6 @@ except ImportError:
 
 dataset = "llava_finetune.json"
 
-
-
-
 print("Loading model and processor...")
 model = LlavaForConditionalGeneration.from_pretrained("llava-hf/llava-1.5-7b-hf", torch_dtype=torch.float16, device_map="auto")
 processor = AutoProcessor.from_pretrained("llava-hf/llava-1.5-7b-hf")
@@ -152,29 +149,19 @@ def get_llava_answer(image_path, prompt):
 
 # Step 1: Embed all images and separate by label
 failure_embeddings = []
-success_embeddings = []
 failure_paths = []
-success_paths = []
-print(f"Embedding {len(data)} images...")
-for idx, entry in enumerate(tqdm(data, desc="Embedding images")):
+num_failures = sum(1 for entry in data if entry["label"] == 0)
+print(f"Embedding {num_failures} failure images...")
+for idx, entry in enumerate(tqdm([e for e in data if e["label"] == 0], desc="Embedding failure images")):
     img_path = entry["image"]
-    label = entry["label"]
     prompt = entry["prompt"]
-    # tqdm disables print, so only print warnings
     emb = get_embedding(img_path, prompt)
     if emb is None:
         tqdm.write(f"Warning: Skipping {img_path} due to invalid image.")
         continue
-    if label == 0:
-        failure_embeddings.append(emb)
-        failure_paths.append(img_path)
-    else:
-        success_embeddings.append(emb)
-        success_paths.append(img_path)
-print("Finished embedding images.")
-
-
-
+    failure_embeddings.append(emb)
+    failure_paths.append(img_path)
+print("Finished embedding failure images.")
 
 # --- Custom PyTorch Training Loop ---
 from torch.utils.data import DataLoader

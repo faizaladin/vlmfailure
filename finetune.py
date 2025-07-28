@@ -83,13 +83,22 @@ class LlavaJsonClassificationDataset(Dataset):
         image = Image.open(item['image']).convert('RGB')
         text = item['prompt']
         label = label_from_text(text)
-        processed = self.processor(
-            text=text,
-            images=image,
-            return_tensors="pt",
-            padding="max_length",
-            truncation=True,
-            max_length=self.max_length
+        # Format as a conversation for LLaVA
+        conversation = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": image},
+                    {"type": "text", "text": text},
+                ],
+            },
+        ]
+        processed = self.processor.apply_chat_template(
+            conversation,
+            add_generation_prompt=True,
+            tokenize=True,
+            return_dict=True,
+            return_tensors="pt"
         )
         processed = {k: v.squeeze(0) for k, v in processed.items()}
         processed['labels'] = torch.tensor(label, dtype=torch.long)

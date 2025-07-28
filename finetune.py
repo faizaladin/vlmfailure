@@ -142,7 +142,7 @@ def get_llava_answer(image_path, prompt):
     else:
         inputs = {k: v.float() if torch.is_tensor(v) else v for k, v in inputs.items()}
     with torch.no_grad():
-        generate_ids = model.generate(**inputs, max_new_tokens=1000)
+        generate_ids = model.generate(**inputs, max_new_tokens=50)
     output = processor.batch_decode(generate_ids, skip_special_tokens=True)[0]
     return output
 

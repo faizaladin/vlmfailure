@@ -182,7 +182,7 @@ def main():
     from torch.nn import functional as F
 
     class CustomTrainer(Trainer):
-        def compute_loss(self, model, inputs, return_outputs=False):
+        def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
             # Standard loss
             labels = inputs.get("labels")
             outputs = model(**inputs)

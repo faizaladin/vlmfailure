@@ -92,7 +92,7 @@ class LlavaJsonClassificationDataset(Dataset):
 def main():
     model_name = "llava-hf/llava-1.5-7b-hf"
     processor = AutoProcessor.from_pretrained(model_name)
-    model = LlavaForConditionalGeneration.from_pretrained(model_name)
+    model = LlavaForConditionalGeneration.from_pretrained(model_name, torch_dtype=torch.float16)
     model = prepare_model_with_lora(model)
 
     dataset_path = dataset
@@ -104,8 +104,9 @@ def main():
     training_args = TrainingArguments(
         output_dir="./results",
         num_train_epochs=3,
-        per_device_train_batch_size=2,
-        per_device_eval_batch_size=2,
+        per_device_train_batch_size=1,
+        per_device_eval_batch_size=1,
+        gradient_accumulation_steps=2,
         save_strategy="epoch",
         logging_dir="./logs",
         learning_rate=2e-4,

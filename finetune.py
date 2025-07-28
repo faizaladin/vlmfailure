@@ -114,18 +114,29 @@ def main():
         report_to="none"
     )
 
+
+    class PrintCallback:
+        def on_epoch_begin(self, args, state, control, **kwargs):
+            print(f"\nStarting epoch {state.epoch+1 if state.epoch is not None else '?'}...")
+        def on_epoch_end(self, args, state, control, **kwargs):
+            print(f"Finished epoch {state.epoch+1 if state.epoch is not None else '?'}.")
+
+    print("Starting training...")
     trainer = Trainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
         tokenizer=processor,
+        callbacks=[PrintCallback()]
     )
 
     trainer.train()
+    print("Training complete.")
 
     # Save the finetuned model and processor
     save_dir = "./finetuned_llava"
+    print(f"Saving model and processor to {save_dir}")
     trainer.save_model(save_dir)
     processor.save_pretrained(save_dir)
 

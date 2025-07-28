@@ -12,8 +12,14 @@ processor = AutoProcessor.from_pretrained(model_dir)
 # Load base model
 base_model = LlavaForConditionalGeneration.from_pretrained("llava-hf/llava-1.5-7b-hf")
 
+
 # Load LoRA weights
 model = PeftModel.from_pretrained(base_model, model_dir)
+
+# Move model to GPU if available
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print(device)
+model = model.to(device)
 
 # Now use `model` and `processor` for inference
 image = Image.open("paired_frames/pos_-2.7755575615628914e-16_head_29/frame_00013.png")
@@ -29,13 +35,18 @@ conversation = [
     },
 ]
 
+
+# Prepare inputs and move to the same device as model
 inputs = processor.apply_chat_template(
     conversation,
     add_generation_prompt=True,
     tokenize=True,
     return_dict=True,
     return_tensors="pt"
-).to(model.device, torch.float16)
+)
+for k, v in inputs.items():
+    if isinstance(v, torch.Tensor):
+        inputs[k] = v.to(device, torch.float16)
 
 # Generate
 generate_ids = model.generate(**inputs, max_new_tokens=50)

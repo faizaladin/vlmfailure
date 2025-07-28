@@ -21,7 +21,7 @@ print(device)
 model = model.to(device)
 
 # Now use `model` and `processor` for inference
-image = Image.open("paired_fail_4k.png")
+image = Image.open("paired_frames/pos_-0.2000000000000003_head_25/frame_00000.png")
 
 conversation = [
     {

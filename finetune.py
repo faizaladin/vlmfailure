@@ -11,7 +11,7 @@ dataset = "llava_finetune.json"
 
 # Custom Dataset for loading JSON data
 class LlavaJsonDataset(Dataset):
-    def __init__(self, json_path, processor, max_length=32):
+    def __init__(self, json_path, processor, max_length=128):
         with open(json_path, 'r') as f:
             self.data = json.load(f)
         self.processor = processor
@@ -78,7 +78,6 @@ class LlavaJsonClassificationDataset(Dataset):
         item = self.data[idx]
         image = Image.open(item['image']).convert('RGB')
         text = item['prompt']
-        label = label_from_text(text)
         # Format as a conversation for LLaVA
         conversation = [
             {
@@ -116,7 +115,7 @@ def main():
 
     training_args = TrainingArguments(
         output_dir="./results",
-        num_train_epochs=3,
+        num_train_epochs=1,
         per_device_train_batch_size=1,
         per_device_eval_batch_size=1,
         gradient_accumulation_steps=8,

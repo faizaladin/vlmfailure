@@ -24,17 +24,26 @@ processor = AutoProcessor.from_pretrained("llava-hf/llava-1.5-7b-hf")
 model.eval()
 
 # --- LoRA/PEFT setup ---
-print("Configuring LoRA for memory-efficient finetuning...")
+
+print("Configuring LoRA for memory-efficient finetuning (last 2 layers only)...")
+# Find the last 2 transformer layers
+transformer_layers = [n for n, _ in model.named_modules() if ".layers." in n and (n.endswith(".q_proj") or n.endswith(".v_proj"))]
+layer_ids = sorted(set(int(n.split(".layers.")[1].split(".")[0]) for n in transformer_layers))
+last2 = layer_ids[-2:]
+target_modules = []
+for lid in last2:
+    target_modules.append(f"model.model.layers.{lid}.self_attn.q_proj")
+    target_modules.append(f"model.model.layers.{lid}.self_attn.v_proj")
 lora_config = LoraConfig(
     r=8, # rank
     lora_alpha=16,
-    target_modules=["q_proj", "v_proj"], # typical for LLaMA-based models
+    target_modules=target_modules,
     lora_dropout=0.05,
     bias="none",
     task_type=TaskType.CAUSAL_LM,
 )
 model = get_peft_model(model, lora_config)
-print("LoRA configuration applied.")
+print(f"LoRA configuration applied to modules: {target_modules}")
 
 # Move model to GPU if available
 if torch.cuda.is_available():

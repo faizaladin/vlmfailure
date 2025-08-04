@@ -28,7 +28,7 @@ conversation = [
         "role": "user",
         "content": [
             {"type": "image", "image": image},
-            {"type": "text", "text": "This is a paired image of two cars using a vision based algorithm to steer under different weather conditions. Is there a cause of failure in this image, and if so what is the cause of failure? If there is no cause of failure, please answer no and explain why there is no cause of failure. If there is, please answer yes followed by reasoning specific to the image and pertains to the weather condition. Create a list of these failures and provide bullet points of reasoning for each one. Lastly, see if there are similar failures that could arise in different weather conditions."},
+            {"type": "text", "text": "This is a paired image of two cars using a vision based algorithm to steer under different weather conditions, while tracking the yellow dotted line on the road. Is there a cause of failure in this image, and if so what is the cause of failure? If there is no cause of failure, please answer no and explain why there is no cause of failure. If there is, please answer yes followed by reasoning specific to the image and pertains to the weather condition. Create a list of these failures and provide bullet points of reasoning for each one. Lastly, see if there are similar failures that could arise in different weather conditions."},
         ],
     },
 ]

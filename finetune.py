@@ -220,7 +220,7 @@ def main():
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
-        tokenizer=processor,
+        processing_class=processor,
         callbacks=[PrintCallback()]
     )
 

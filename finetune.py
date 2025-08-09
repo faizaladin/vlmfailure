@@ -167,9 +167,10 @@ def main():
             # Get the logits for the first generated token after the prompt
             # (Assume batch size 1 for simplicity)
             first_token_logits = logits[:, -labels.shape[1], :]  # shape: (batch, vocab)
-            # Get token ids for "yes" and "no"
-            yes_id = self.tokenizer("yes", return_tensors="pt").input_ids[0, 1].item()
-            no_id = self.tokenizer("no", return_tensors="pt").input_ids[0, 1].item()
+            # Get token ids for "yes" and "no" using the tokenizer directly
+            tokenizer = self.processing_class.tokenizer if hasattr(self, 'processing_class') else self.tokenizer
+            yes_id = tokenizer("yes", return_tensors="pt").input_ids[0, 1].item()
+            no_id = tokenizer("no", return_tensors="pt").input_ids[0, 1].item()
             # Stack logits for "yes" and "no"
             binary_logits = torch.stack([first_token_logits[:, yes_id], first_token_logits[:, no_id]], dim=1)
             # Target: 0 if label is "yes", 1 if label is "no"

@@ -122,12 +122,16 @@ def main():
     val_size = len(full_dataset) - train_size
     train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
 
+    print(f"Total dataset size: {len(full_dataset)}")
+    print(f"Training set size: {len(train_dataset)}")
+    print(f"Validation set size: {len(val_dataset)}")
+
     # ...existing code...
     wandb.init(project="llava-finetune", name="llava-1.5-7b-binary")
 
     training_args = TrainingArguments(
         output_dir="./results",
-        num_train_epochs=1,
+        num_train_epochs=10,
         per_device_train_batch_size=1,
         per_device_eval_batch_size=1,
         gradient_accumulation_steps=8,
@@ -148,10 +152,10 @@ def main():
         def on_epoch_end(self, args, state, control, **kwargs):
             print(f"Finished epoch {int(state.epoch)+1 if state.epoch is not None else '?'}.")
 
-    print("Trainable parameters (requires_grad=True):")
-    for name, param in model.named_parameters():
-        if param.requires_grad:
-            print(name, param.shape)
+    # print("Trainable parameters (requires_grad=True):")
+    # for name, param in model.named_parameters():
+    #     if param.requires_grad:
+    #         print(name, param.shape)
 
     print("Starting training...")
 

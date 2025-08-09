@@ -103,28 +103,6 @@ class LlavaJsonClassificationDataset(Dataset):
         processed['labels'] = processed['input_ids'].clone()
         return processed
 
-def compute_image_embedding(model, image, processor, device):
-    # Get image embedding from the vision encoder
-    # This assumes the model has a vision_tower with a forward method
-    image_tensor = processor.image_processor(image, return_tensors="pt").pixel_values.to(device)
-    with torch.no_grad():
-        image_emb = model.model.vision_tower(image_tensor).last_hidden_state.mean(dim=1).squeeze(0)
-    return image_emb
-
-def precompute_failure_embeddings(model, processor, dataset, device):
-    failure_embs = []
-    for item in dataset:
-        # 0 = failure image, 1 = no failure image
-        text = item['prompt'] if 'prompt' in item else item['text']
-        label = label_from_text(text)
-        if label == 0:  # Only use failure images for the failure set
-            image = Image.open(item['image']).convert('RGB')
-            emb = compute_image_embedding(model, image, processor, device)
-            failure_embs.append(emb.cpu())
-    if failure_embs:
-        return torch.stack(failure_embs)
-    else:
-        return torch.empty(0)
 
 def main():
     model_name = "llava-hf/llava-1.5-7b-hf"
@@ -144,11 +122,7 @@ def main():
     val_size = len(full_dataset) - train_size
     train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
 
-    # Precompute failure set embeddings (from training set only)
-    print("Precomputing failure set embeddings...")
-    # Use the raw data dicts for access to image paths and text
-    failure_embs = precompute_failure_embeddings(model, processor, full_dataset.data[:train_size], device)
-    print(f"Failure set size: {failure_embs.shape[0]}")
+    # ...existing code...
     wandb.init(project="llava-finetune", name="llava-1.5-7b-binary")
 
     training_args = TrainingArguments(

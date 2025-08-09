@@ -161,9 +161,9 @@ def main():
         logging_dir="./logs",
         learning_rate=2e-4,
         fp16=True,  # Use float16 mixed precision
-            report_to="wandb",
-            run_name="llava-1.5-7b-binary",
-            project="llava-finetune"
+        report_to="wandb",
+        run_name="llava-1.5-7b-binary"
+        # REMOVE project=...
     )
 
     from transformers import TrainerCallback

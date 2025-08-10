@@ -74,6 +74,7 @@ if __name__ == "__main__":
     model = get_peft_model(model, lora_config)
     model.gradient_checkpointing_enable()
     model = model.to(device)
+    model.train()
 
     optimizer = optim.AdamW(model.parameters(), lr=2e-5)
     criterion = nn.BCEWithLogitsLoss()
@@ -101,7 +102,6 @@ if __name__ == "__main__":
     batch_size = nearest_power_of_2(len(failure_set) * 2)
     print(f"Calculated batch size: {batch_size}")
 
-    model.train()
     for epoch in range(epochs):
         # Get indices for failure (label==0) and success (label==1) in training set
         failure_indices = [idx for idx in training_dataset.indices if dataset.data[idx]['label'] == 0]
@@ -133,7 +133,6 @@ if __name__ == "__main__":
         batch_loader = DataLoader(batch_dataset, batch_size=1, shuffle=False)
         print(f"Number of items in the batch (from batch_loader): {len(batch_loader.dataset)}")
 
-        model.train()
         total_loss = 0
         optimizer.zero_grad()
 

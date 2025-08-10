@@ -10,11 +10,11 @@ model_dir = "./finetuned_llava"
 processor = AutoProcessor.from_pretrained(model_dir)
 
 # Load base model
-#base_model = LlavaForConditionalGeneration.from_pretrained("llava-hf/llava-1.5-7b-hf")
-model = LlavaForConditionalGeneration.from_pretrained("llava-hf/llava-1.5-7b-hf")
+base_model = LlavaForConditionalGeneration.from_pretrained("llava-hf/llava-1.5-7b-hf")
+#model = LlavaForConditionalGeneration.from_pretrained("llava-hf/llava-1.5-7b-hf")
 
 # # Load LoRA weights
-#model = PeftModel.from_pretrained(base_model, model_dir)
+model = PeftModel.from_pretrained(base_model, model_dir)
 
 # Move model to GPU if available
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')

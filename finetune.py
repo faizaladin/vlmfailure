@@ -150,8 +150,7 @@ def main():
         learning_rate=2e-4,
         fp16=True,  # Use float16 mixed precision
         report_to="wandb",
-        run_name="llava-1.5-7b-binary",
-        evaluation_strategy="epoch"
+        run_name="llava-1.5-7b-binary"
     )
 
     from transformers import TrainerCallback

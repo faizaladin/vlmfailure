@@ -8,6 +8,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import random_split
 import math
+import torch.nn.functional as F
 
 class LlavaJsonClassificationDataset(Dataset):
     def __init__(self, json_path, processor, max_length=128):
@@ -53,9 +54,6 @@ def collate_fn(batch):
         else:
             out[key] = [item[key] for item in batch]
     return out
-    
-
-# ...existing imports and code...
 
 if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -63,12 +61,15 @@ if __name__ == "__main__":
     dataset = LlavaJsonClassificationDataset("llava_finetune.json", processor)
 
     model = LlavaForConditionalGeneration.from_pretrained("llava-hf/llava-1.5-7b-hf")
+    model.gradient_checkpointing_enable()
     model = model.to(device)
 
     optimizer = optim.AdamW(model.parameters(), lr=2e-5)
     criterion = nn.BCEWithLogitsLoss()
 
     epochs = 1
+    accumulation_steps = 4  # For gradient accumulation
+    scaler = torch.cuda.amp.GradScaler()  # For mixed precision
 
     # Split dataset: 80% train, 20% val
     total_len = len(dataset)
@@ -81,12 +82,14 @@ if __name__ == "__main__":
         if dataset.data[idx]['label'] == 0:
             failure_set.add(idx)
     print(len(failure_set), "failure frames in training set")
-     # Calculate batch size: 2 * len(failure_set), rounded down to nearest power of 2
+
+    # Calculate batch size: 2 * len(failure_set), rounded down to nearest power of 2
     def nearest_power_of_2(n):
         return 2 ** (n.bit_length() - 1) if n > 0 else 1
 
     batch_size = nearest_power_of_2(len(failure_set) * 2)
     print(f"Calculated batch size: {batch_size}")
+
     model.train()
     for epoch in range(epochs):
         # Get indices for failure (label==0) and success (label==1) in training set
@@ -109,8 +112,6 @@ if __name__ == "__main__":
         batch = collate_fn(batch)
         print(f"Batch size: {len(batch['label'])}, Failures: {int((batch['label']==0).sum())}, Successes: {int((batch['label']==1).sum())}")
 
-        print(f"Batch size: {len(batch['label'])}, Failures: {int((batch['label']==0).sum())}, Successes: {int((batch['label']==1).sum())}")
-
         # Create a DataLoader for this batch
         batch_dataset = torch.utils.data.TensorDataset(
             batch['input_ids'],
@@ -119,5 +120,62 @@ if __name__ == "__main__":
             batch['label']
         )
         batch_loader = DataLoader(batch_dataset, batch_size=1, shuffle=False)
-        print(len(batch_loader))
         print(f"Number of items in the batch (from batch_loader): {len(batch_loader.dataset)}")
+
+        model.train()
+        total_loss = 0
+        optimizer.zero_grad()
+        for step, (input_ids, attention_mask, labels, targets) in enumerate(batch_loader):
+            input_ids = input_ids.to(device)
+            attention_mask = attention_mask.to(device)
+            labels = labels.to(device)
+            targets = targets.to(device)
+
+            with torch.cuda.amp.autocast():
+                outputs = model.generate(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    max_new_tokens=32,
+                    return_dict_in_generate=True,
+                    output_scores=True
+                )
+                # Decode generated answer
+                generated_ids = outputs.sequences
+                generated_text = processor.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
+
+                # Reference answers
+                ref_yes = "yes there is a failure"
+                ref_no = "there is no cause of failure"
+
+                # Get embeddings for generated and reference answers
+                with torch.no_grad():
+                    gen_emb = model.model.embed_tokens(processor.tokenizer(generated_text, return_tensors="pt").input_ids.to(device)).mean(dim=1)
+                    yes_emb = model.model.embed_tokens(processor.tokenizer(ref_yes, return_tensors="pt").input_ids.to(device)).mean(dim=1)
+                    no_emb = model.model.embed_tokens(processor.tokenizer(ref_no, return_tensors="pt").input_ids.to(device)).mean(dim=1)
+
+                # Cosine similarity
+                sim_yes = F.cosine_similarity(gen_emb, yes_emb)
+                sim_no = F.cosine_similarity(gen_emb, no_emb)
+
+                # Assign label
+                pred_label = 0 if sim_yes > sim_no else 1
+
+                # Compare with ground truth
+                print(f"Predicted label: {pred_label}, Ground Truth label: {int(targets.item())}")
+
+                # Compute loss
+                pred_label_tensor = torch.tensor([pred_label], dtype=torch.float, device=device)
+                loss = criterion(pred_label_tensor, targets) / accumulation_steps
+
+            scaler.scale(loss).backward()
+
+            if (step + 1) % accumulation_steps == 0 or (step + 1) == len(batch_loader):
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad()
+
+            total_loss += loss.item() * accumulation_steps  # Undo normalization for reporting
+
+        avg_loss = total_loss / len(batch_loader)
+        print(f"Epoch {epoch+1} - Training Loss: {avg_loss:.4f}")
+        

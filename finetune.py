@@ -105,6 +105,16 @@ class LlavaJsonClassificationDataset(Dataset):
 
 
 def main():
+    # Compute class weights for BCEWithLogitsLoss
+    # 0 = failure (minority), 1 = no failure (majority)
+    labels = [item['label'] for item in full_dataset.data]
+    num_pos = sum(1 for l in labels if l == 1)
+    num_neg = sum(1 for l in labels if l == 0)
+    if num_neg > 0:
+        pos_weight = torch.tensor([num_neg / num_pos], dtype=torch.float)
+        print(f"Class imbalance: {num_neg} failure (0), {num_pos} no failure (1), pos_weight for BCE: {pos_weight.item():.2f}")
+    else:
+        pos_weight = torch.tensor([1.0], dtype=torch.float)
     model_name = "llava-hf/llava-1.5-7b-hf"
     processor = AutoProcessor.from_pretrained(model_name)
 
@@ -140,8 +150,8 @@ def main():
         learning_rate=2e-4,
         fp16=True,  # Use float16 mixed precision
         report_to="wandb",
-        run_name="llava-1.5-7b-binary"
-        # REMOVE project=...
+        run_name="llava-1.5-7b-binary",
+        evaluation_strategy="epoch"
     )
 
     from transformers import TrainerCallback
@@ -149,8 +159,17 @@ def main():
     class PrintCallback(TrainerCallback):
         def on_epoch_begin(self, args, state, control, **kwargs):
             print(f"\nStarting epoch {int(state.epoch)+1 if state.epoch is not None else '?'}...")
-        def on_epoch_end(self, args, state, control, **kwargs):
+        def on_epoch_end(self, args, state, control, logs=None, **kwargs):
             print(f"Finished epoch {int(state.epoch)+1 if state.epoch is not None else '?'}.")
+            # Print and log average training and validation loss for the epoch
+            import wandb
+            if logs:
+                if 'loss' in logs:
+                    print(f"Average training loss for epoch: {logs['loss']:.4f}")
+                    wandb.log({"train_loss": logs['loss']}, step=int(state.epoch)+1 if state.epoch is not None else None)
+                if 'eval_loss' in logs:
+                    print(f"Validation loss for epoch: {logs['eval_loss']:.4f}")
+                    wandb.log({"val_loss": logs['eval_loss']}, step=int(state.epoch)+1 if state.epoch is not None else None)
 
     # print("Trainable parameters (requires_grad=True):")
     # for name, param in model.named_parameters():
@@ -184,7 +203,9 @@ def main():
             selected_logit = binary_logits[:, gt_label]
             selected_logit = selected_logit.unsqueeze(1)
             target = target.unsqueeze(1)
-            loss_fct = BCEWithLogitsLoss()
+            # Use the pos_weight computed in main
+            global pos_weight
+            loss_fct = BCEWithLogitsLoss(pos_weight=pos_weight.to(logits.device))
             loss = loss_fct(selected_logit, target)
             if return_outputs:
                 return loss, outputs

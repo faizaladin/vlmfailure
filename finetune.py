@@ -87,7 +87,7 @@ if __name__ == "__main__":
     def nearest_power_of_2(n):
         return 2 ** (n.bit_length() - 1) if n > 0 else 1
 
-    batch_size = nearest_power_of_2(len(failure_set) * 2)
+    batch_size = 32
     print(f"Calculated batch size: {batch_size}")
 
     model.train()
@@ -178,4 +178,3 @@ if __name__ == "__main__":
 
         avg_loss = total_loss / len(batch_loader)
         print(f"Epoch {epoch+1} - Training Loss: {avg_loss:.4f}")
-        

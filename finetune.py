@@ -3,7 +3,7 @@ import torch
 import numpy as np
 from PIL import Image
 from transformers import LlavaForConditionalGeneration, AutoProcessor, Trainer, TrainingArguments
-from torch.utils.data import Dataset, random_split
+from torch.utils.data import Dataset, random_split, DataLoader, Sampler
 import random
 from tqdm import tqdm
 import wandb
@@ -23,7 +23,6 @@ class LlavaJsonDataset(Dataset):
 
     def __getitem__(self, idx):
         item = self.data[idx]
-        # Assumes each item has 'image' (path) and 'text' fields
         image = Image.open(item['image']).convert('RGB')
         text = item['text']
         processed = self.processor(
@@ -34,7 +33,6 @@ class LlavaJsonDataset(Dataset):
             truncation=True,
             max_length=self.max_length
         )
-        # Remove batch dimension
         processed = {k: v.squeeze(0) for k, v in processed.items()}
         return processed
 
@@ -57,10 +55,6 @@ def prepare_model_with_lora(model):
 def label_from_text(text):
     import re
     text_lower = text.strip().lower()
-    # By convention:
-    #   0 = failure image ("yes" answer)
-    #   1 = no failure image ("no" answer)
-    # Match 'yes' or 'no' as a whole word, possibly followed by punctuation
     if re.search(r'\byes\b[\.,!?:;]?', text_lower):
         return 0  # failure image
     elif re.search(r'\bno\b[\.,!?:;]?', text_lower):
@@ -82,7 +76,6 @@ class LlavaJsonClassificationDataset(Dataset):
         item = self.data[idx]
         image = Image.open(item['image']).convert('RGB')
         text = item['prompt']
-        # Format as a conversation for LLaVA
         conversation = [
             {
                 "role": "user",
@@ -101,8 +94,46 @@ class LlavaJsonClassificationDataset(Dataset):
         )
         processed = {k: v.squeeze(0) for k, v in processed.items()}
         processed['labels'] = processed['input_ids'].clone()
+        processed['label'] = item['label']  # Add label for sampler
         return processed
 
+# Balanced batch sampler
+class BalancedBatchSampler(Sampler):
+    def __init__(self, dataset, batch_size=128, pos_per_batch=64, neg_per_batch=64):
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.pos_per_batch = pos_per_batch
+        self.neg_per_batch = neg_per_batch
+
+        # Find indices for each class
+        self.pos_indices = [i for i, item in enumerate(dataset.data) if item['label'] == 1]
+        self.neg_indices = [i for i, item in enumerate(dataset.data) if item['label'] == 0]
+        self.num_batches = min(len(self.pos_indices) // pos_per_batch, len(self.neg_indices) // neg_per_batch)
+
+    def __iter__(self):
+        pos_indices = self.pos_indices.copy()
+        neg_indices = self.neg_indices.copy()
+        random.shuffle(pos_indices)
+        random.shuffle(neg_indices)
+        for i in range(self.num_batches):
+            pos_batch = pos_indices[i*self.pos_per_batch:(i+1)*self.pos_per_batch]
+            neg_batch = neg_indices[i*self.neg_per_batch:(i+1)*self.neg_per_batch]
+            batch = pos_batch + neg_batch
+            random.shuffle(batch)
+            yield batch
+
+    def __len__(self):
+        return self.num_batches
+
+def collate_fn(batch):
+    # Collate a list of dicts into a dict of batched tensors
+    out = {}
+    for key in batch[0]:
+        if isinstance(batch[0][key], torch.Tensor):
+            out[key] = torch.stack([item[key] for item in batch])
+        else:
+            out[key] = [item[key] for item in batch]
+    return out
 
 def main():
     model_name = "llava-hf/llava-1.5-7b-hf"
@@ -110,8 +141,6 @@ def main():
 
     dataset_path = dataset
     full_dataset = LlavaJsonClassificationDataset(dataset_path, processor)
-    # Compute class weights for BCEWithLogitsLoss
-    # 0 = failure (minority), 1 = no failure (majority)
     labels = [item['label'] for item in full_dataset.data]
     num_pos = sum(1 for l in labels if l == 1)
     num_neg = sum(1 for l in labels if l == 0)
@@ -136,19 +165,18 @@ def main():
     print(f"Training set size: {len(train_dataset)}")
     print(f"Validation set size: {len(val_dataset)}")
 
-    # ...existing code...
     wandb.init(project="llava-finetune", name="llava-1.5-7b-binary")
 
     training_args = TrainingArguments(
         output_dir="./results",
         num_train_epochs=2,
-        per_device_train_batch_size=1,
+        per_device_train_batch_size=128,
         per_device_eval_batch_size=1,
-        gradient_accumulation_steps=8,
+        gradient_accumulation_steps=1,
         save_strategy="epoch",
         logging_dir="./logs",
         learning_rate=2e-4,
-        fp16=True,  # Use float16 mixed precision
+        fp16=True,
         report_to="wandb",
         run_name="llava-1.5-7b-binary"
     )
@@ -160,7 +188,6 @@ def main():
             print(f"\nStarting epoch {int(state.epoch)+1 if state.epoch is not None else '?'}...")
         def on_epoch_end(self, args, state, control, logs=None, **kwargs):
             print(f"Finished epoch {int(state.epoch)+1 if state.epoch is not None else '?'}.")
-            # Print and log average training and validation loss for the epoch
             import wandb
             if logs:
                 if 'loss' in logs:
@@ -169,11 +196,6 @@ def main():
                 if 'eval_loss' in logs:
                     print(f"Validation loss for epoch: {logs['eval_loss']:.4f}")
                     wandb.log({"val_loss": logs['eval_loss']}, step=int(state.epoch)+1 if state.epoch is not None else None)
-
-    # print("Trainable parameters (requires_grad=True):")
-    # for name, param in model.named_parameters():
-    #     if param.requires_grad:
-    #         print(name, param.shape)
 
     print("Starting training...")
 
@@ -190,28 +212,25 @@ def main():
             outputs = model(**inputs)
             logits = outputs.logits
 
-            # Get the logits for the first generated token after the prompt
-            # (Assume batch size 1 for simplicity)
-            first_token_logits = logits[:, -labels.shape[1], :]  # shape: (batch, vocab)
-            # Get token ids for "yes" and "no" using the tokenizer directly
+            first_token_logits = logits[:, -labels.shape[1], :]
             tokenizer = self.processing_class.tokenizer if hasattr(self, 'processing_class') else self.tokenizer
             yes_id = tokenizer("yes", return_tensors="pt").input_ids[0, 1].item()
             no_id = tokenizer("no", return_tensors="pt").input_ids[0, 1].item()
-            # Stack logits for "yes" and "no"
             binary_logits = torch.stack([first_token_logits[:, yes_id], first_token_logits[:, no_id]], dim=1)
-            # Target: 0 if label is "yes", 1 if label is "no"
             gt_label = labels[0][0].item()
             target = torch.tensor([gt_label], dtype=torch.float, device=logits.device)
-            # Use only the logit for the correct class
             selected_logit = binary_logits[:, gt_label]
             selected_logit = selected_logit.unsqueeze(1)
             target = target.unsqueeze(1)
-            # Use the pos_weight computed in main
             loss_fct = BCEWithLogitsLoss(pos_weight=self.pos_weight.to(logits.device))
             loss = loss_fct(selected_logit, target)
             if return_outputs:
                 return loss, outputs
             return loss
+
+    # Use the balanced batch sampler for the training set
+    train_sampler = BalancedBatchSampler(train_dataset.dataset, batch_size=128, pos_per_batch=64, neg_per_batch=64)
+    train_loader = DataLoader(train_dataset.dataset, batch_sampler=train_sampler, collate_fn=collate_fn)
 
     trainer = CustomTrainer(
         model=model,
@@ -220,13 +239,18 @@ def main():
         eval_dataset=val_dataset,
         processing_class=processor,
         callbacks=[PrintCallback()],
-        pos_weight=pos_weight
+        pos_weight=pos_weight,
+        data_collator=collate_fn
     )
+
+    # Monkey-patch the train_dataloader to use our balanced loader
+    def train_dataloader_override():
+        return train_loader
+    trainer.train_dataloader = train_dataloader_override
 
     trainer.train()
     print("Training complete.")
 
-    # Save the finetuned model and processor
     save_dir = "./finetuned_llava"
     print(f"Saving model and processor to {save_dir}")
     trainer.save_model(save_dir)

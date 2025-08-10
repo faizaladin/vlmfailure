@@ -10,6 +10,7 @@ from torch.utils.data import random_split
 import math
 import torch.nn.functional as F
 from peft import LoraConfig, get_peft_model, TaskType
+from torch.nn import CosineSimilarity, MSELoss
 
 class LlavaJsonClassificationDataset(Dataset):
     def __init__(self, json_path, processor, max_length=128):
@@ -135,6 +136,10 @@ if __name__ == "__main__":
         model.train()
         total_loss = 0
         optimizer.zero_grad()
+
+        cos = CosineSimilarity(dim=1)
+        mse = MSELoss()
+
         for step, (input_ids, attention_mask, labels, targets) in enumerate(batch_loader):
             input_ids = input_ids.to(device)
             attention_mask = attention_mask.to(device)
@@ -142,42 +147,39 @@ if __name__ == "__main__":
             targets = targets.to(device)
 
             with torch.cuda.amp.autocast():
-                outputs = model.generate(
+                # Forward pass
+                outputs = model(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
-                    max_new_tokens=32,
-                    return_dict_in_generate=True,
-                    output_scores=True
+                    output_hidden_states=True,  # <-- get hidden states
+                    labels=labels
                 )
-                # Decode generated answer
-                generated_ids = outputs.sequences
-                generated_text = processor.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
+                # Get the last hidden state for the answer token
+                # (Assume answer is at the last position; adjust as needed)
+                hidden_states = outputs.hidden_states[-1]  # (batch, seq, hidden)
+                answer_emb = hidden_states[:, -1, :]       # (batch, hidden)
 
-                # Reference answers
+                # Reference embeddings (precompute and move to device)
                 ref_yes = "yes there is a failure"
                 ref_no = "there is no cause of failure"
-
-                # Get embeddings for generated and reference answers
                 with torch.no_grad():
-                    # Use this for all three embeddings:
+                    ref_yes_ids = processor.tokenizer(ref_yes, return_tensors="pt").input_ids.to(device)
+                    ref_no_ids = processor.tokenizer(ref_no, return_tensors="pt").input_ids.to(device)
                     embed_tokens = model.model.model.language_model.embed_tokens
-                    gen_emb = embed_tokens(processor.tokenizer(generated_text, return_tensors="pt").input_ids.to(device)).mean(dim=1)
-                    yes_emb = embed_tokens(processor.tokenizer(ref_yes, return_tensors="pt").input_ids.to(device)).mean(dim=1)
-                    no_emb = embed_tokens(processor.tokenizer(ref_no, return_tensors="pt").input_ids.to(device)).mean(dim=1)
+                    yes_emb = embed_tokens(ref_yes_ids).mean(dim=1)  # (1, hidden)
+                    no_emb = embed_tokens(ref_no_ids).mean(dim=1)    # (1, hidden)
 
-                # Cosine similarity
-                sim_yes = F.cosine_similarity(gen_emb, yes_emb)
-                sim_no = F.cosine_similarity(gen_emb, no_emb)
+                # Cosine similarities
+                sim_yes = cos(answer_emb, yes_emb)  # (batch,)
+                sim_no = cos(answer_emb, no_emb)    # (batch,)
 
-                # Assign label
-                pred_label = 0 if sim_yes > sim_no else 1
+                # Target: if GT label==0, want sim_yes=1, sim_no=-1; if GT label==1, want sim_no=1, sim_yes=-1
+                target_sim_yes = (targets == 0).float() * 1.0 + (targets == 1).float() * -1.0
+                target_sim_no = (targets == 1).float() * 1.0 + (targets == 0).float() * -1.0
 
-                # Compare with ground truth
-                print(f"Predicted label: {pred_label}, Ground Truth label: {int(targets.item())}")
-
-                # Compute loss
-                pred_label_tensor = torch.tensor([pred_label], dtype=torch.float, device=device)
-                loss = criterion(pred_label_tensor, targets) / accumulation_steps
+                # Loss: encourage correct similarity to be high, incorrect to be low
+                loss = mse(sim_yes, target_sim_yes) + mse(sim_no, target_sim_no)
+                loss = loss / accumulation_steps
 
             scaler.scale(loss).backward()
 
@@ -186,8 +188,11 @@ if __name__ == "__main__":
                 scaler.update()
                 optimizer.zero_grad()
 
-            total_loss += loss.item() * accumulation_steps  # Undo normalization for reporting
+            total_loss += loss.item() * accumulation_steps
+
+            # For monitoring: which similarity is higher?
+            pred_label_cos = 0 if sim_yes.item() > sim_no.item() else 1
+            print(f"CosineSim Pred label: {pred_label_cos}, GT label: {int(targets.item())}")
 
         avg_loss = total_loss / len(batch_loader)
         print(f"Epoch {epoch+1} - Training Loss: {avg_loss:.4f}")
-        

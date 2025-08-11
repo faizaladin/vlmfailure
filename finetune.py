@@ -116,9 +116,8 @@ class WeightedLossTrainer(Trainer):
         logits_flat = logits.view(-1, self.model.config.vocab_size)
         labels_flat = labels.view(-1)
         
-        # Define the loss function WITH the stored class weights
-        loss_fct = torch.nn.CrossEntropyLoss(weight=self.class_weights)
-        
+        # Use standard CrossEntropyLoss for language modeling
+        loss_fct = torch.nn.CrossEntropyLoss()
         loss = loss_fct(logits_flat, labels_flat)
         return (loss, outputs) if return_outputs else loss
 

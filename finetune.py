@@ -20,7 +20,7 @@ class BatchDictDataset(Dataset):
                 return self.batch[idx]
 
 class LlavaJsonClassificationDataset(Dataset):
-    def __init__(self, json_path, processor, max_length=256):
+    def __init__(self, json_path, processor, max_length=1024):
         with open(json_path, 'r') as f:
             self.data = json.load(f)
         self.processor = processor

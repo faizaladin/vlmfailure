@@ -56,10 +56,7 @@ class LlavaJsonClassificationDataset(Dataset):
             add_generation_prompt=True,
             tokenize=True,
             return_dict=True,
-            return_tensors="pt",
-            max_length=self.max_length,
-            padding="max_length",
-            truncation=True,
+            return_tensors="pt"
         )
         prompt_encoding = {k: v.squeeze(0) for k, v in prompt_encoding.items()}
         prompt_len = (prompt_encoding['input_ids'] != self.processor.tokenizer.pad_token_id).sum().item()

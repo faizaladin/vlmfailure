@@ -72,6 +72,7 @@ if __name__ == "__main__":
     )
     model = get_peft_model(model, lora_config)
     model.gradient_checkpointing_enable()
+    sum(p.requires_grad for p in model.parameters())
     model = model.to(device)
     model.train()
 

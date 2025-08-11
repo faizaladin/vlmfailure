@@ -151,8 +151,8 @@ if __name__ == "__main__":
         model.train()
         for i, batch in enumerate(batch_loader):
             optimizer.zero_grad()
-            # batch is a list of dicts (batch size 1), so use batch[0]
-            inputs = {k: v.to(device) for k, v in batch[0].items() if isinstance(v, torch.Tensor) and k != "label"}
+            # batch is a dict (since batch_size=1 and no collate_fn)
+            inputs = {k: v.to(device) for k, v in batch.items() if isinstance(v, torch.Tensor) and k != "label"}
             output = model(**inputs)
             loss = output.loss  # This is differentiable
             print('input_ids shape:', inputs['input_ids'].shape)

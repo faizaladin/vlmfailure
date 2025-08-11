@@ -129,7 +129,6 @@ if __name__ == "__main__":
         num_train_epochs=1,
         per_device_train_batch_size=4,
         per_device_eval_batch_size=4,
-        evaluation_strategy="epoch",
         save_strategy="epoch",
         logging_dir="./logs",
         logging_steps=10,

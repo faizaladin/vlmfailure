@@ -157,7 +157,7 @@ if __name__ == "__main__":
             optimizer.zero_grad()
             # Move all tensor inputs to device
             inputs = {k: v.to(device) for k, v in batch.items() if isinstance(v, torch.Tensor) and k != "label"}
-            with torch.cuda.amp.autocast():
+            with torch.amp.autocast('cuda'):
                 # batch['labels'] should be token IDs of the target sentence
                 output = model(**inputs)
                 loss = output.loss  # This is differentiable

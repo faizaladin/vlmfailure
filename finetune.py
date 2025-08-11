@@ -69,10 +69,11 @@ class LlavaJsonClassificationDataset(Dataset):
         )["input_ids"].squeeze(0)
         # Build labels: -100 for prompt, target tokens for answer, pad/truncate to match input_ids
         labels = torch.full((seq_len,), -100, dtype=torch.long)
-        # Place answer tokens at the end of the sequence
-        answer_len = min(target_tokens.shape[0], seq_len)
-        if answer_len > 0:
-            labels[-answer_len:] = target_tokens[:answer_len]
+        # Place answer tokens immediately after the prompt
+        prompt_len = (input_ids != self.processor.tokenizer.pad_token_id).sum().item()
+        answer_len = min(target_tokens.shape[0], seq_len - prompt_len)
+        if answer_len > 0 and prompt_len + answer_len <= seq_len:
+            labels[prompt_len:prompt_len+answer_len] = target_tokens[:answer_len]
         processed = prompt_encoding
         processed['labels'] = labels
         processed['target_text'] = target_text

@@ -129,26 +129,28 @@ if __name__ == "__main__":
 
     # --- 4. Training with Hugging Face Trainer ---
     training_args = TrainingArguments(
-        output_dir="llava-finetuned-model",
-        per_device_train_batch_size=2, # Adjust based on your VRAM
-        per_device_eval_batch_size=2,
-        gradient_accumulation_steps=8, # Effective batch size = 2 * 8 = 16
-        num_train_epochs=1,
-        learning_rate=1e-5,
-        weight_decay=0.01,
-        lr_scheduler_type="cosine",
-        warmup_ratio=0.03,
-        logging_steps=10,
-        save_steps=200,
-        eval_steps=200,
-        save_total_limit=2,
-        load_best_model_at_end=True,
-        metric_for_best_model="eval_loss",
-        greater_is_better=False,
-        fp16=True, # Enable mixed-precision training
-        gradient_checkpointing=True,
-        report_to="tensorboard",
-    )
+    output_dir="llava-finetuned-model",
+    per_device_train_batch_size=2,
+    per_device_eval_batch_size=2,
+    gradient_accumulation_steps=8,
+    num_train_epochs=1,
+    learning_rate=1e-5,
+    weight_decay=0.01,
+    lr_scheduler_type="cosine",
+    warmup_ratio=0.03,
+    logging_steps=10,
+    save_steps=200,
+    eval_steps=200,
+    evaluation_strategy="steps",
+    save_total_limit=2,
+    load_best_model_at_end=True,
+    metric_for_best_model="eval_loss",
+    greater_is_better=False,
+    fp16=True,
+    gradient_checkpointing=True,
+    report_to="wandb",
+    run_name="llava-lora-run",
+)
 
     trainer = Trainer(
         model=model,

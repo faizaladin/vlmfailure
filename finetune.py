@@ -151,7 +151,7 @@ if __name__ == "__main__":
             inputs = {k: v.to(device) for k, v in batch.items() if isinstance(v, torch.Tensor) and k != "label"}
             with torch.cuda.amp.autocast():
                 # batch['labels'] should be token IDs of the target sentence
-                output = model(**inputs, labels=batch['labels'])
+                output = model(**inputs)
                 loss = output.loss  # This is differentiable
                 loss.backward()
 

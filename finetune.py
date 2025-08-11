@@ -163,10 +163,6 @@ if __name__ == "__main__":
                 loss = output.loss  # This is differentiable
 
             # Inspect output (optional)
-            generated_ids = torch.argmax(output.logits, dim=-1)
-            generated_text = processor.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
-            print("Generated:", generated_text)
-
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()

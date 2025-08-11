@@ -3,21 +3,20 @@ import torch
 import numpy as np
 from PIL import Image
 from transformers import LlavaForConditionalGeneration, AutoProcessor
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, random_split
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import random_split
-import math
 import torch.nn.functional as F
 from peft import LoraConfig, get_peft_model, TaskType
 
+# Dataset classes as you had them
 class BatchDictDataset(Dataset):
-            def __init__(self, batch):
-                self.batch = batch
-            def __len__(self):
-                return len(self.batch)
-            def __getitem__(self, idx):
-                return self.batch[idx]
+    def __init__(self, batch):
+        self.batch = batch
+    def __len__(self):
+        return len(self.batch)
+    def __getitem__(self, idx):
+        return self.batch[idx]
 
 class LlavaJsonClassificationDataset(Dataset):
     def __init__(self, json_path, processor, max_length=1024):
@@ -34,13 +33,15 @@ class LlavaJsonClassificationDataset(Dataset):
         image = Image.open(item['image']).convert('RGB')
         text = item['prompt']
         label = item['label']
-        # Map 0/1 to text
+
+        # Map 0/1 to text label for generation target
         if label == 0:
             target_text = "yes"
         elif label == 1:
             target_text = "no"
         else:
             target_text = str(label)
+
         conversation = [
             {
                 "role": "user",
@@ -50,7 +51,6 @@ class LlavaJsonClassificationDataset(Dataset):
                 ],
             },
         ]
-        # Get prompt tokens
         prompt_encoding = self.processor.apply_chat_template(
             conversation,
             add_generation_prompt=True,
@@ -61,72 +61,93 @@ class LlavaJsonClassificationDataset(Dataset):
         prompt_encoding = {k: v.squeeze(0) for k, v in prompt_encoding.items()}
         input_ids = prompt_encoding['input_ids']
         seq_len = input_ids.shape[0]
-        # Tokenize the target_text as the label sequence
+
         target_tokens = self.processor.tokenizer(
             target_text,
             add_special_tokens=False,
             return_tensors="pt"
         )["input_ids"].squeeze(0)
-        # Build labels: -100 for prompt, target tokens for answer, pad/truncate to match input_ids
+
         labels = torch.full((seq_len,), -100, dtype=torch.long)
-        # Place answer tokens immediately after the prompt
         prompt_len = (input_ids != self.processor.tokenizer.pad_token_id).sum().item()
         answer_len = min(target_tokens.shape[0], seq_len - prompt_len)
         if answer_len > 0 and prompt_len + answer_len <= seq_len:
             labels[prompt_len:prompt_len+answer_len] = target_tokens[:answer_len]
+
         processed = prompt_encoding
         processed['labels'] = labels
         processed['target_text'] = target_text
+        processed['label'] = torch.tensor(label, dtype=torch.float)  # binary label for BCE
         return processed
 
+# Model wrapper with classification head
+class LlavaWithClassificationHead(nn.Module):
+    def __init__(self, base_model, hidden_size):
+        super().__init__()
+        self.base_model = base_model
+        self.classification_head = nn.Linear(hidden_size, 1)  # binary classification
+
+    def forward(self, input_ids, images, labels=None, **kwargs):
+        outputs = self.base_model(
+            input_ids=input_ids,
+            images=images,
+            labels=labels,
+            output_hidden_states=True,
+            **kwargs,
+        )
+        hidden_states = outputs.hidden_states[-1]  # (batch, seq_len, hidden_size)
+        cls_hidden = hidden_states[:, -1, :]  # last token hidden state
+        logits_cls = self.classification_head(cls_hidden).squeeze(-1)  # (batch,)
+        return outputs, logits_cls
+
+def nearest_power_of_2(n):
+    return 2 ** (n.bit_length() - 1) if n > 0 else 1
 
 if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    # Load processor and dataset
     processor = AutoProcessor.from_pretrained("llava-hf/llava-1.5-7b-hf")
     dataset = LlavaJsonClassificationDataset("llava_finetune.json", processor)
 
-    model = LlavaForConditionalGeneration.from_pretrained("llava-hf/llava-1.5-7b-hf")
+    # Load base model and apply LoRA
+    base_model = LlavaForConditionalGeneration.from_pretrained("llava-hf/llava-1.5-7b-hf")
     lora_config = LoraConfig(
         r=8,
         lora_alpha=16,
         target_modules=["q_proj", "v_proj"],
         lora_dropout=0.05,
         bias="none",
-        task_type=TaskType.CAUSAL_LM
+        task_type=TaskType.CAUSAL_LM,
     )
-    model = get_peft_model(model, lora_config)
+    base_model = get_peft_model(base_model, lora_config)
+
+    # Wrap model with classification head
+    model = LlavaWithClassificationHead(base_model, base_model.config.hidden_size)
     model.gradient_checkpointing_enable()
-    print('Any parameters require grad:', any(p.requires_grad for p in model.parameters()))
-    print('Parameters that require grad:')
-    for name, param in model.named_parameters():
-        if param.requires_grad:
-            print('  ', name)
-    for name, param in model.named_parameters():
-        if "lora" in name.lower():
-            param.requires_grad = True
     model = model.to(device)
     model.train()
 
+    print('Trainable parameters:')
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            print('  ', name)
+
     optimizer = optim.AdamW(model.parameters(), lr=2e-5)
-    criterion = nn.BCEWithLogitsLoss()
+    criterion_cls = nn.BCEWithLogitsLoss()
+
     epochs = 1
     accumulation_steps = 4
 
-    # Split dataset: 80% train, 20% val
+    # Split dataset 80/20 train/val
     total_len = len(dataset)
     train_len = int(0.8 * total_len)
     val_len = total_len - train_len
     training_dataset, validation_dataset = random_split(dataset, [train_len, val_len])
-    val_dataloader = DataLoader(validation_dataset, batch_size=1, shuffle=False)
-    failure_set = set()
-    for idx in training_dataset.indices:
-        if dataset.data[idx]['label'] == 0:
-            failure_set.add(idx)
+
+    # Example dynamic batching based on label balance
+    failure_set = set(idx for idx in training_dataset.indices if dataset.data[idx]['label'] == 0)
     print(len(failure_set), "failure frames in training set")
-
-    def nearest_power_of_2(n):
-        return 2 ** (n.bit_length() - 1) if n > 0 else 1
-
     batch_size = nearest_power_of_2(len(failure_set) * 2)
     print(f"Dynamic batch size set to: {batch_size}")
 
@@ -143,27 +164,26 @@ if __name__ == "__main__":
     np.random.shuffle(batch_indices)
 
     batch = [dataset[idx] for idx in batch_indices]
-
     batch_loader = DataLoader(BatchDictDataset(batch), batch_size=1, shuffle=False)
-    print(f"Number of items in the batch (from batch_loader): {len(batch_loader.dataset)}")
+
+    alpha = 1.0  # generation loss weight
+    beta = 1.0   # classification loss weight
 
     for epoch in range(epochs):
         model.train()
         for i, batch in enumerate(batch_loader):
             optimizer.zero_grad()
-            # batch is a dict (since batch_size=1 and no collate_fn)
-            inputs = {k: v.to(device) for k, v in batch.items() if isinstance(v, torch.Tensor) and k != "label"}
-            output = model(**inputs)
-            loss = output.loss  # This is differentiable
-            print('input_ids shape:', inputs['input_ids'].shape)
-            print('labels shape:', inputs['labels'].shape)
-            print('labels:', inputs['labels'])
-            print('Loss:', loss)
-            print('Loss requires grad:', loss.requires_grad)
-            print('Loss grad_fn:', loss.grad_fn)
 
-            # Inspect output (optional)
+            # Move tensors to device
+            inputs = {k: v.to(device) for k, v in batch.items() if isinstance(v, torch.Tensor) and k not in ['label']}
+            labels_cls = batch['label'].to(device)
+
+            outputs, logits_cls = model(**inputs)
+            loss_text = outputs.loss
+            loss_cls = criterion_cls(logits_cls, labels_cls)
+
+            loss = alpha * loss_text + beta * loss_cls
             loss.backward()
             optimizer.step()
-    
 
+            print(f"Epoch {epoch} Iter {i} Loss Text: {loss_text.item():.4f} Loss Cls: {loss_cls.item():.4f} Total: {loss.item():.4f}")

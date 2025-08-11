@@ -59,18 +59,20 @@ class LlavaJsonClassificationDataset(Dataset):
             return_tensors="pt"
         )
         prompt_encoding = {k: v.squeeze(0) for k, v in prompt_encoding.items()}
-        prompt_len = (prompt_encoding['input_ids'] != self.processor.tokenizer.pad_token_id).sum().item()
+        input_ids = prompt_encoding['input_ids']
+        seq_len = input_ids.shape[0]
         # Tokenize the target_text as the label sequence
         target_tokens = self.processor.tokenizer(
             target_text,
             add_special_tokens=False,
             return_tensors="pt"
         )["input_ids"].squeeze(0)
-        # Build labels: -100 for prompt, target tokens for answer, pad to max_length
-        labels = torch.full((self.max_length,), -100, dtype=torch.long)
-        answer_len = min(target_tokens.shape[0], self.max_length - prompt_len)
+        # Build labels: -100 for prompt, target tokens for answer, pad/truncate to match input_ids
+        labels = torch.full((seq_len,), -100, dtype=torch.long)
+        # Place answer tokens at the end of the sequence
+        answer_len = min(target_tokens.shape[0], seq_len)
         if answer_len > 0:
-            labels[prompt_len:prompt_len+answer_len] = target_tokens[:answer_len]
+            labels[-answer_len:] = target_tokens[:answer_len]
         processed = prompt_encoding
         processed['labels'] = labels
         processed['target_text'] = target_text

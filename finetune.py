@@ -162,6 +162,12 @@ if __name__ == "__main__":
             inputs = {k: v.to(device) for k, v in batch.items() if isinstance(v, torch.Tensor) and k != "label"}
             output = model(**inputs)
             loss = output.loss  # This is differentiable
+            print('input_ids shape:', inputs['input_ids'].shape)
+            print('labels shape:', inputs['labels'].shape)
+            print('labels:', inputs['labels'])
+            print('Loss:', loss)
+            print('Loss requires grad:', loss.requires_grad)
+            print('Loss grad_fn:', loss.grad_fn)
 
             # Inspect output (optional)
             loss.backward()

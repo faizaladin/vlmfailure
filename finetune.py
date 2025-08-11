@@ -103,7 +103,7 @@ class WeightedLossTrainer(Trainer):
         else:
             self.class_weights = None
 
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         """
         Overrides the default loss function to apply class weights.
         """

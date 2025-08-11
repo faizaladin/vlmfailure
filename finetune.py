@@ -8,8 +8,9 @@ from torch.utils.data import random_split
 from peft import LoraConfig, get_peft_model, TaskType
 from transformers import TrainingArguments, Trainer
 import torch.nn as nn
+
 class CustomTrainer(Trainer):
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         labels = inputs.get("label")
         # Forward pass
         outputs = model(**{k: v for k, v in inputs.items() if k != "label"})

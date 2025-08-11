@@ -20,7 +20,7 @@ class BatchDictDataset(Dataset):
                 return self.batch[idx]
 
 class LlavaJsonClassificationDataset(Dataset):
-    def __init__(self, json_path, processor, max_length=128):
+    def __init__(self, json_path, processor, max_length=256):
         with open(json_path, 'r') as f:
             self.data = json.load(f)
         self.processor = processor
@@ -50,23 +50,32 @@ class LlavaJsonClassificationDataset(Dataset):
                 ],
             },
         ]
-        processed = self.processor.apply_chat_template(
+        # Get prompt tokens
+        prompt_encoding = self.processor.apply_chat_template(
             conversation,
             add_generation_prompt=True,
             tokenize=True,
             return_dict=True,
-            return_tensors="pt"
-        )
-        processed = {k: v.squeeze(0) for k, v in processed.items()}
-        # Tokenize the target_text as the label sequence
-        label_tokens = self.processor.tokenizer(
-            target_text,
+            return_tensors="pt",
             max_length=self.max_length,
             padding="max_length",
             truncation=True,
+        )
+        prompt_encoding = {k: v.squeeze(0) for k, v in prompt_encoding.items()}
+        prompt_len = (prompt_encoding['input_ids'] != self.processor.tokenizer.pad_token_id).sum().item()
+        # Tokenize the target_text as the label sequence
+        target_tokens = self.processor.tokenizer(
+            target_text,
+            add_special_tokens=False,
             return_tensors="pt"
         )["input_ids"].squeeze(0)
-        processed['labels'] = label_tokens
+        # Build labels: -100 for prompt, target tokens for answer, pad to max_length
+        labels = torch.full((self.max_length,), -100, dtype=torch.long)
+        answer_len = min(target_tokens.shape[0], self.max_length - prompt_len)
+        if answer_len > 0:
+            labels[prompt_len:prompt_len+answer_len] = target_tokens[:answer_len]
+        processed = prompt_encoding
+        processed['labels'] = labels
         processed['target_text'] = target_text
         return processed
 

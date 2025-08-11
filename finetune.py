@@ -103,21 +103,20 @@ class WeightedLossTrainer(Trainer):
         else:
             self.class_weights = None
 
-    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+    def compute_loss(self, model, inputs, return_outputs=False):
         """
         Overrides the default loss function to apply class weights.
         """
         labels = inputs.pop("labels")
-        # Forward pass
         outputs = model(**inputs)
         logits = outputs.get("logits")
         
-        # Flatten the logits and labels for CrossEntropyLoss
         logits_flat = logits.view(-1, self.model.config.vocab_size)
         labels_flat = labels.view(-1)
         
-        # Use standard CrossEntropyLoss for language modeling
-        loss_fct = torch.nn.CrossEntropyLoss()
+        # CORRECT: This now uses the weights stored in the trainer
+        loss_fct = torch.nn.CrossEntropyLoss(weight=self.class_weights)
+        
         loss = loss_fct(logits_flat, labels_flat)
         return (loss, outputs) if return_outputs else loss
 
@@ -228,6 +227,6 @@ if __name__ == "__main__":
     trainer.train()
 
     # Save the final model adapter
-    trainer.save_model("llava-finetuned-final-weighted")
-    print("Training complete. Model saved to 'llava-finetuned-final-weighted'")
+    trainer.save_model("llava-finetuned")
+    print("Training complete. Model saved to 'llava-finetuned'")
 

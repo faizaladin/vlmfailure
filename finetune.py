@@ -136,11 +136,11 @@ if __name__ == "__main__":
         total_loss = 0
         optimizer.zero_grad()
 
-        for step, (input_ids, attention_mask, labels, targets) in enumerate(batch_loader):
-            input_ids = input_ids.to(device)
-            attention_mask = attention_mask.to(device)
-            labels = labels.to(device)
-            targets = targets.to(device)
+        for step, batch_data in enumerate(batch_loader):
+            input_ids = batch_data['input_ids'].to(device)
+            attention_mask = batch_data['attention_mask'].to(device)
+            labels = batch_data['labels'].to(device)
+            targets = batch_data['label'].to(device)
 
             with torch.cuda.amp.autocast():
                 outputs = model(

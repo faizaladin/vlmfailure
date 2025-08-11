@@ -142,14 +142,13 @@ if __name__ == "__main__":
             labels = batch_data['labels'].to(device)
             targets = batch_data['label'].to(device).float()
 
-            with torch.cuda.amp.autocast():
+            with torch.amp.autocast('cuda'):
                 outputs = model(
                     input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    labels=labels
+                    attention_mask=attention_mask
                 )
                 logits = outputs.logits  # (batch, seq, vocab)
-
+                
                 active_positions = (labels != -100)
                 batch_idx_, seq_idx = torch.where(active_positions)
                 label_token_ids = labels[batch_idx_, seq_idx]
@@ -170,17 +169,9 @@ if __name__ == "__main__":
                 if no_logits.numel() > 0:
                     loss_parts.append(criterion(no_logits, 1 - targets_no))
 
-                loss = sum(loss_parts) / len(loss_parts) if loss_parts else torch.tensor(0.0, device=device)
+                loss = sum(loss_parts) / len(loss_parts) if loss_parts else torch.tensor(0.0, device=device, requires_grad=True)
                 loss = loss / accumulation_steps
 
-                scaler.scale(loss).backward()
-
-                if (step + 1) % accumulation_steps == 0 or (step + 1) == len(batch_loader):
-                    scaler.step(optimizer)
-                    scaler.update()
-                    optimizer.zero_grad()
-                
-                total_loss += loss.item() * accumulation_steps
 
         avg_loss = total_loss / len(batch_loader)
         print(f"Epoch {epoch+1} - Training Loss: {avg_loss:.4f}")

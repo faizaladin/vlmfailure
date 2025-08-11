@@ -79,14 +79,6 @@ class LlavaJsonClassificationDataset(Dataset):
         processed['target_text'] = target_text
         return processed
 
-def collate_fn(batch):
-    out = {}
-    for key in batch[0]:
-        if isinstance(batch[0][key], torch.Tensor):
-            out[key] = torch.stack([item[key] for item in batch])
-        else:
-            out[key] = [item[key] for item in batch]
-    return out
 
 if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -125,7 +117,7 @@ if __name__ == "__main__":
     train_len = int(0.8 * total_len)
     val_len = total_len - train_len
     training_dataset, validation_dataset = random_split(dataset, [train_len, val_len])
-    val_dataloader = DataLoader(validation_dataset, batch_size=1, shuffle=False, collate_fn=collate_fn)
+    val_dataloader = DataLoader(validation_dataset, batch_size=1, shuffle=False)
     failure_set = set()
     for idx in training_dataset.indices:
         if dataset.data[idx]['label'] == 0:
@@ -152,15 +144,15 @@ if __name__ == "__main__":
 
     batch = [dataset[idx] for idx in batch_indices]
 
-    batch_loader = DataLoader(BatchDictDataset(batch), batch_size=1, shuffle=False, collate_fn=collate_fn)
+    batch_loader = DataLoader(BatchDictDataset(batch), batch_size=1, shuffle=False)
     print(f"Number of items in the batch (from batch_loader): {len(batch_loader.dataset)}")
 
     for epoch in range(epochs):
         model.train()
         for i, batch in enumerate(batch_loader):
             optimizer.zero_grad()
-            # Move all tensor inputs to device
-            inputs = {k: v.to(device) for k, v in batch.items() if isinstance(v, torch.Tensor) and k != "label"}
+            # batch is a list of dicts (batch size 1), so use batch[0]
+            inputs = {k: v.to(device) for k, v in batch[0].items() if isinstance(v, torch.Tensor) and k != "label"}
             output = model(**inputs)
             loss = output.loss  # This is differentiable
             print('input_ids shape:', inputs['input_ids'].shape)

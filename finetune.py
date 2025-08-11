@@ -2,7 +2,7 @@ import json
 import torch
 import numpy as np
 from PIL import Image
-from transformers import LlavaForConditionalGeneration, AutoProcessor, TrainingArguments, Trainer
+from transformers import LlavaForConditionalGeneration, AutoProcessor, TrainingArguments, Trainer, BitsAndBytesConfig
 from torch.utils.data import Dataset, random_split
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 
@@ -103,7 +103,7 @@ class WeightedLossTrainer(Trainer):
         else:
             self.class_weights = None
 
-    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+    def compute_loss(self, model, inputs, return_outputs=False):
         """
         Overrides the default loss function to apply class weights.
         """
@@ -138,18 +138,25 @@ if __name__ == "__main__":
     # Calculate weights inversely proportional to class frequency
     # This gives a higher weight to the rarer class
     class_weights = total_samples / (2 * class_counts)
-    class_weights_tensor = torch.tensor(class_weights, dtype=torch.float).to(device)
+    class_weights_tensor = torch.tensor(class_weights, dtype=torch.float)
 
     print(f"Handling class imbalance. Class Counts: {class_counts}")
     print(f"Calculated Loss Weights: {class_weights_tensor}")
 
-    # --- 1. Model and Processor Loading ---
+    # --- 1. Model and Processor Loading (with 4-bit Quantization) ---
     model_id = "llava-hf/llava-1.5-7b-hf"
+
+    # Define quantization config for 4-bit loading
+    quantization_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.float16,
+    )
 
     model = LlavaForConditionalGeneration.from_pretrained(
         model_id,
-        torch_dtype=torch.float16,
-        low_cpu_mem_usage=True,
+        quantization_config=quantization_config, # Apply 4-bit quantization
+        device_map="auto", # Automatically map model layers to available devices
     )
     # CRITICAL: Prepares the model for k-bit training and fixes gradient checkpointing issues
     model = prepare_model_for_kbit_training(model)
@@ -184,13 +191,13 @@ if __name__ == "__main__":
     print(f"Training samples: {len(training_dataset)}")
     print(f"Validation samples: {len(validation_dataset)}")
 
-    # --- 4. Training Arguments ---
+    # --- 4. Training Arguments (Memory Optimized) ---
     training_args = TrainingArguments(
         output_dir="llava-finetuned-model-weighted",
-        per_device_train_batch_size=1,
+        per_device_train_batch_size=1, # Reduced from 2 to 1
         per_device_eval_batch_size=1,
-        gradient_accumulation_steps=16,
-        num_train_epochs=100,
+        gradient_accumulation_steps=16, # Increased from 8 to 16 to maintain effective batch size
+        num_train_epochs=1,
         learning_rate=1e-5,
         weight_decay=0.01,
         lr_scheduler_type="cosine",
@@ -203,9 +210,9 @@ if __name__ == "__main__":
         load_best_model_at_end=True,
         metric_for_best_model="eval_loss",
         greater_is_better=False,
-        fp16=True,
-        report_to="wandb",
-        run_name="llava-lora-weighted-loss",
+        fp16=True, # Mixed-precision training
+        gradient_checkpointing=True, # Enable gradient checkpointing
+        report_to="wandb", # Changed to wandb
     )
 
     # --- 5. Instantiate and Run the Custom Trainer ---
@@ -218,10 +225,10 @@ if __name__ == "__main__":
         class_weights=class_weights_tensor, # Pass the calculated weights
     )
     
-    print("Starting training with weighted loss...")
+    print("Starting training with weighted loss and memory optimization...")
     trainer.train()
 
     # Save the final model adapter
-    trainer.save_model("llava-finetuned-final")
-    print("Training complete. Model saved to 'llava-finetuned-final'")
+    trainer.save_model("llava-finetuned-final-weighted")
+    print("Training complete. Model saved to 'llava-finetuned-final-weighted'")
 

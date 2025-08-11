@@ -56,7 +56,7 @@ inputs = processor(text=full_prompt, images=image, return_tensors="pt").to(devic
 # --- 5. Generate and Decode Output ---
 print("Generating response...")
 # Generate a very short response, as we only expect "yes" or "no"
-generate_ids = model.generate(**inputs, max_new_tokens=1000)
+generate_ids = model.generate(**inputs, max_new_tokens=10000)
 
 # Decode the output
 response_text = processor.batch_decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]

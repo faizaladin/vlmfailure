@@ -7,6 +7,31 @@ from torch.utils.data import Dataset, DataLoader
 from torch.utils.data import random_split
 from peft import LoraConfig, get_peft_model, TaskType
 from transformers import TrainingArguments, Trainer
+import torch.nn as nn
+class CustomTrainer(Trainer):
+    def compute_loss(self, model, inputs, return_outputs=False):
+        labels = inputs.get("label")
+        # Forward pass
+        outputs = model(**{k: v for k, v in inputs.items() if k != "label"})
+        logits = outputs.logits
+        # Get the generated answer (greedy decode)
+        generated_ids = torch.argmax(logits, dim=-1)
+        decoded = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
+        # Map answer to 1 if contains 'no', 0 if contains 'yes'
+        preds = []
+        for ans in decoded:
+            ans_lower = ans.lower()
+            if "no" in ans_lower:
+                preds.append(1.0)
+            elif "yes" in ans_lower:
+                preds.append(0.0)
+            else:
+                preds.append(0.5)  # ambiguous, can be handled differently
+        preds = torch.tensor(preds, dtype=torch.float, device=labels.device)
+        # BCE loss
+        bce_loss = nn.BCEWithLogitsLoss()
+        loss = bce_loss(preds, labels)
+        return (loss, outputs) if return_outputs else loss
 
 class BatchDictDataset(Dataset):
             def __init__(self, batch):
@@ -89,34 +114,8 @@ if __name__ == "__main__":
     val_len = total_len - train_len
     training_dataset, validation_dataset = random_split(dataset, [train_len, val_len])
 
-    # --- Batch calculation and selection logic (restored) ---
-    failure_set = set()
-    for idx in training_dataset.indices:
-        if dataset.data[idx]['label'] == 0:
-            failure_set.add(idx)
-    print(len(failure_set), "failure frames in training set")
 
-    def nearest_power_of_2(n):
-        return 2 ** (n.bit_length() - 1) if n > 0 else 1
-
-    batch_size = nearest_power_of_2(len(failure_set) * 2)
-    print(f"Dynamic batch size set to: {batch_size}")
-
-    failure_indices = [idx for idx in training_dataset.indices if dataset.data[idx]['label'] == 0]
-    success_indices = [idx for idx in training_dataset.indices if dataset.data[idx]['label'] == 1]
-
-    half_batch = batch_size // 2
-    num_failures = min(half_batch, len(failure_indices))
-    num_successes = min(half_batch, len(success_indices))
-
-    selected_failure_indices = np.random.choice(failure_indices, num_failures, replace=False)
-    selected_success_indices = np.random.choice(success_indices, num_successes, replace=False)
-    batch_indices = np.concatenate([selected_failure_indices, selected_success_indices])
-    np.random.shuffle(batch_indices)
-
-    batch = [dataset[idx] for idx in batch_indices]
-    batch_dataset = BatchDictDataset(batch)
-    print(f"Number of items in the batch (from batch_dataset): {len(batch_dataset)}")
+    # Use the full training set for Trainer
 
     # --- Trainer setup ---
     def compute_metrics(eval_pred):
@@ -138,13 +137,14 @@ if __name__ == "__main__":
         report_to=[],
     )
 
-    trainer = Trainer(
+    trainer = CustomTrainer(
         model=model,
         args=training_args,
-        train_dataset=batch_dataset,  # Use the selected batch
+        train_dataset=training_dataset,  # Use the full training set
         eval_dataset=validation_dataset,
         data_collator=collate_fn,
         compute_metrics=compute_metrics,
+        tokenizer=processor,
     )
 
     trainer.train()

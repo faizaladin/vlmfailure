@@ -117,7 +117,8 @@ class WeightedLossTrainer(Trainer):
         labels_flat = labels.view(-1)
         
         # Use standard CrossEntropyLoss for language modeling
-        loss_fct = torch.nn.CrossEntropyLoss()
+        loss_fct = torch.nn.CrossEntropyLoss(weight=self.class_weights)
+        #loss_fct = torch.nn.CrossEntropyLoss()
         loss = loss_fct(logits_flat, labels_flat)
         return (loss, outputs) if return_outputs else loss
 

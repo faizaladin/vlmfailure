@@ -108,15 +108,13 @@ class WeightedLossTrainer(Trainer):
         Overrides the default loss function to apply class weights.
         """
         labels = inputs.pop("labels")
-        # Forward pass
         outputs = model(**inputs)
         logits = outputs.get("logits")
         
-        # Flatten the logits and labels for CrossEntropyLoss
         logits_flat = logits.view(-1, self.model.config.vocab_size)
         labels_flat = labels.view(-1)
         
-        # Define the loss function WITH the stored class weights
+        # CORRECT: This now uses the weights stored in the trainer
         loss_fct = torch.nn.CrossEntropyLoss(weight=self.class_weights)
         
         loss = loss_fct(logits_flat, labels_flat)
@@ -205,14 +203,14 @@ if __name__ == "__main__":
         logging_steps=10,
         save_steps=200,
         eval_steps=200,
-        evaluation_strategy="steps",
+        eval_strategy="steps",
         save_total_limit=2,
         load_best_model_at_end=True,
         metric_for_best_model="eval_loss",
         greater_is_better=False,
         fp16=True, # Mixed-precision training
         gradient_checkpointing=True, # Enable gradient checkpointing
-        report_to="tensorboard", # or "wandb"
+        report_to="wandb", # Changed to wandb
     )
 
     # --- 5. Instantiate and Run the Custom Trainer ---

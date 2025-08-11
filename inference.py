@@ -4,7 +4,7 @@ from PIL import Image
 from peft import PeftModel
 
 # Path to your saved model directory
-model_dir = "llava_finetuned-final"
+model_dir = "llava-finetuned-final-weighted"
 
 # Load processor
 processor = AutoProcessor.from_pretrained(model_dir)

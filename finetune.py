@@ -123,7 +123,7 @@ if __name__ == "__main__":
     base_model = get_peft_model(base_model, lora_config)
 
     # Wrap model with classification head
-    model = LlavaWithClassificationHead(base_model, base_model.config.hidden_size)
+    model = LlavaWithClassificationHead(base_model, base_model.model.config.hidden_size)
     model.gradient_checkpointing_enable()
     model = model.to(device)
     model.train()

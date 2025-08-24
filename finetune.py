@@ -139,8 +139,9 @@ if __name__ == "__main__":
     total_len = len(dataset)
     train_len = int(0.9 * total_len)
     val_len = total_len - train_len
-    training_dataset, validation_dataset = random_split(dataset, [train_len, val_len])
-    
+    # Use the first 90% for training, last 10% for validation (test)
+    training_dataset = torch.utils.data.Subset(dataset, list(range(train_len)))
+    validation_dataset = torch.utils.data.Subset(dataset, list(range(train_len, total_len)))
     print(f"Training samples: {len(training_dataset)}")
     print(f"Validation samples: {len(validation_dataset)}")
 

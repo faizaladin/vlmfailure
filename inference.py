@@ -31,11 +31,18 @@ processor = AutoProcessor.from_pretrained(base_model_id)
 adapter_dir = "llava-finetuned" 
 
 print(f"Loading LoRA adapter from: {adapter_dir}")
-model = PeftModel.from_pretrained(base_model, adapter_dir)
+model = base_model
 
 print("Merging adapter weights for faster inference...")
-model = model.merge_and_unload()
-print("Merge complete.")
+
+# --- 3. (Commented out) Load and Merge the LoRA Adapter ---
+# To use the base model only, skip loading LoRA weights
+# adapter_dir = "llava-finetuned" 
+# print(f"Loading LoRA adapter from: {adapter_dir}")
+# model = PeftModel.from_pretrained(base_model, adapter_dir)
+# print("Merging adapter weights...")
+# model = model.merge_and_unload()
+# print("Merge complete.")
 
 
 # --- 4. Prepare Inputs and Run Inference ---

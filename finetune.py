@@ -133,13 +133,25 @@ if __name__ == "__main__":
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
 
-    # --- 3. Dataset and Splitting ---
+    # --- 3. Dataset and Splitting (by trajectory) ---
     dataset = LlavaFinetuneDataset(json_path, processor)
-    total_len = len(dataset)
-    train_len = int(0.85 * total_len)
-    val_len = total_len - train_len
-    training_dataset = torch.utils.data.Subset(dataset, list(range(train_len)))
-    validation_dataset = torch.utils.data.Subset(dataset, list(range(train_len, total_len)))
+    with open(json_path, 'r') as f:
+        all_data = json.load(f)
+
+    def get_traj(entry):
+        # expects path like paired_frames/<traj>/<frame>.png
+        return entry['image'].split('/')[1]
+
+    # Get all unique trajectories, sorted
+    trajs = sorted(set(get_traj(entry) for entry in all_data))
+    last_10_trajs = set(trajs[-10:])
+
+    # Indices for validation and training
+    val_indices = [i for i, entry in enumerate(all_data) if get_traj(entry) in last_10_trajs]
+    train_indices = [i for i, entry in enumerate(all_data) if get_traj(entry) not in last_10_trajs]
+
+    training_dataset = torch.utils.data.Subset(dataset, train_indices)
+    validation_dataset = torch.utils.data.Subset(dataset, val_indices)
 
     print(f"Training samples: {len(training_dataset)}")
     print(f"Validation samples: {len(validation_dataset)}")

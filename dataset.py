@@ -1,29 +1,28 @@
+
 import os
-import csv
 import re
 import json
 
 frame_dir = "paired_frames"
-failure_frames_file = "normalized_failure_frames.txt"
+failure_frames_file = "failure_points_by_trajectory.txt"
 
-def folder_to_failure_key(folder):
-    # Converts "-0.2000000000000003_25" -> "pos_-0.2000000000000003_head_25"
-    parts = folder.split("_")
-    if len(parts) == 2:
-        float_part, int_part = parts
-        prefix = "pos_"
-        return f"{prefix}{float_part}_head_{int_part}"
-    return folder
 
-# Parse failure frames as (folder, frame) pairs
+# No folder renaming: use the actual folder name as in paired_frames
+
+
+# Parse failure frames as (folder, frame) pairs, using the actual folder name
 failure_set = set()
 with open(failure_frames_file, "r") as f:
     for line in f:
-        folder, frames_str = line.strip().split(",", 1)
-        folder = folder.strip()
-        frame_nums = re.findall(r"\d+", frames_str)
-        for frame in frame_nums:
-            failure_set.add((folder, str(int(frame))))  # Ensure frame is normalized as string int
+        # Example line: y=-0.2000000000000003, heading=25, failure_frames=[59]
+        match = re.match(r"y=([^,]+), heading=(\d+), failure_frames=\[([^\]]*)\]", line.strip())
+        if match:
+            y_val, heading, frames_str = match.groups()
+            folder = f"{y_val}_{heading}"
+            frame_nums = [s for s in re.findall(r"\d+", frames_str)]
+            for frame in frame_nums:
+                failure_set.add((folder, str(int(frame))))
+
 
 # Recursively find all images in all subfolders
 image_paths = []
@@ -34,8 +33,8 @@ for subdir in os.listdir(frame_dir):
             if file.lower().endswith(('.png', '.jpg', '.jpeg')):
                 frame_num_match = re.search(r"\d+", os.path.splitext(file)[0])
                 frame_num = str(int(frame_num_match.group())) if frame_num_match else os.path.splitext(file)[0]
-                failure_key = folder_to_failure_key(subdir)
-                image_paths.append((os.path.join(subdir_path, file), failure_key, frame_num))
+                # Use the actual folder name (subdir) and frame_num
+                image_paths.append((os.path.join(subdir_path, file), subdir, frame_num))
 
 # Sort image_paths by folder, then by frame number (as int if possible)
 def try_int(x):
@@ -46,13 +45,9 @@ def try_int(x):
 
 image_paths.sort(key=lambda x: (x[1], try_int(x[2])))
 
-# Assign labels and write to CSV
-with open("llava_dataset.csv", "w", newline="") as csvfile:
-    writer = csv.writer(csvfile)
-    writer.writerow(["image_path", "label"])
-    for img_path, folder, frame_num in image_paths:
-        label = 0 if (folder, frame_num) in failure_set else 1
-        writer.writerow([img_path, label])
+
+
+# Assign labels for JSON only (no CSV), using the correct (folder, frame_num) logic
 
 # Create JSON for LLaVA 1.5 finetuning
 finetune_prompt = (

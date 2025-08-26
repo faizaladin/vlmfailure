@@ -32,18 +32,18 @@ class LlavaFinetuneDataset(Dataset):
         label = item['label']
         target_text = "yes" if label == 1 else "no"
         full_prompt = f"USER: <image>\n{prompt}\nASSISTANT:"
-        
+
         inputs = self.processor(text=full_prompt, images=image, return_tensors="pt")
         labels = self.processor(text=target_text, return_tensors="pt", add_special_tokens=False).input_ids
         prompt_len = inputs['input_ids'].shape[1]
-        
+
         inputs['input_ids'] = torch.cat([inputs['input_ids'], labels], dim=1)
         inputs['attention_mask'] = torch.ones(inputs['input_ids'].shape, dtype=torch.long)
-        
+
         labels_for_loss = torch.full(inputs['input_ids'].shape, -100, dtype=torch.long)
         labels_for_loss[:, prompt_len:] = labels
         inputs['labels'] = labels_for_loss
-        
+
         return {k: v.squeeze(0) for k, v in inputs.items()}
 
 def collate_fn(batch):
@@ -99,7 +99,6 @@ class CustomTrainer(Trainer):
             pin_memory=self.args.dataloader_pin_memory,
         )
 
-
 if __name__ == "__main__":
     json_path = "llava_finetune.json"
     model_id = "llava-hf/llava-1.5-7b-hf"
@@ -117,7 +116,7 @@ if __name__ == "__main__":
         device_map="auto",
     )
     model = prepare_model_for_kbit_training(model)
-    
+
     processor = AutoProcessor.from_pretrained(model_id)
     processor.tokenizer.padding_side = 'right'
     processor.tokenizer.pad_token = processor.tokenizer.eos_token
@@ -139,9 +138,9 @@ if __name__ == "__main__":
     total_len = len(dataset)
     train_len = int(0.9 * total_len)
     val_len = total_len - train_len
-    # Use the first 90% for training, last 10% for validation (test)
     training_dataset = torch.utils.data.Subset(dataset, list(range(train_len)))
     validation_dataset = torch.utils.data.Subset(dataset, list(range(train_len, total_len)))
+
     print(f"Training samples: {len(training_dataset)}")
     print(f"Validation samples: {len(validation_dataset)}")
 
@@ -169,7 +168,7 @@ if __name__ == "__main__":
         report_to="wandb",
     )
 
-    # --- 5. Instantiate and Run the Custom Trainer ---
+# --- 5. Instantiate and Run the Custom Trainer ---
     # NOTE: We are now using the CustomTrainer, not the old WeightedLossTrainer
     trainer = CustomTrainer(
         model=model,
@@ -178,7 +177,7 @@ if __name__ == "__main__":
         eval_dataset=validation_dataset,
         data_collator=collate_fn,
     )
-    
+
     print("Starting training with weighted random sampler...")
     trainer.train()
 

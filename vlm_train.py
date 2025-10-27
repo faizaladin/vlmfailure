@@ -175,9 +175,9 @@ if __name__ == "__main__":
 
     training_args = TrainingArguments(
         output_dir="llava-finetuned-model-sampler",
-        per_device_train_batch_size=8, # Reduced batch size for potential memory increase
+        per_device_train_batch_size=8,
         per_device_eval_batch_size=8,
-        gradient_accumulation_steps=4, # Adjust as needed
+        gradient_accumulation_steps=4,
         num_train_epochs=100,
         learning_rate=1e-5,
         weight_decay=0.01,
@@ -185,6 +185,7 @@ if __name__ == "__main__":
         warmup_ratio=0.03,
         logging_steps=10,
         save_steps=200,
+        eval_steps=200,  # <-- ADD THIS LINE to match save_steps
         save_total_limit=2,
         load_best_model_at_end=True,
         metric_for_best_model="eval_loss",

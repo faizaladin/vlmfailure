@@ -85,12 +85,13 @@ class LlavaClassificationHead(nn.Module):
     def __init__(self, base_model, num_main_classes, num_collision_objects):
         super().__init__()
         self.base_model = base_model
-        # Use hidden_size from vision tower config
-        hidden_size = getattr(base_model.config.vision_tower_config, 'hidden_size', None)
+        # Try multiple ways to get hidden_size
+        hidden_size = getattr(base_model.config, 'hidden_size', None)
+        if hidden_size is None and hasattr(base_model, 'vision_tower'):
+            hidden_size = getattr(base_model.vision_tower.config, 'hidden_size', None)
         if hidden_size is None:
-            hidden_size = getattr(base_model.config.vision_tower_config, 'hidden_dim', None)
-        if hidden_size is None:
-            raise AttributeError('Could not find hidden_size or hidden_dim in vision_tower_config')
+            print("Config keys:", list(base_model.config.__dict__.keys()))
+            raise AttributeError('Could not find hidden_size in config or vision_tower.config')
         self.main_classifier = nn.Linear(hidden_size, num_main_classes)
         self.collision_classifier = nn.Linear(hidden_size, num_collision_objects)
 

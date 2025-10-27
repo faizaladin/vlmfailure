@@ -1,171 +1,247 @@
 
 
-"""
-Llava training/inference scaffold using Hugging Face transformers and PEFT (LoRA).
-Loads initial sequence, prompt, and expected label from llava_input.json.
-"""
 
 import json
-from PIL import Image
-from torchvision import transforms
 import torch
-from torch.utils.data import Dataset, DataLoader
-import wandb
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from peft import LoraConfig, get_peft_model
+import numpy as np
+from PIL import Image
+from transformers import LlavaForConditionalGeneration, AutoProcessor, TrainingArguments, Trainer, BitsAndBytesConfig
+from torch.utils.data import Dataset, random_split, DataLoader, WeightedRandomSampler
+from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 
-class LlavaSequenceDataset(Dataset):
-    def __init__(self, json_path, num_frames=16, transform=None, concat_resize=(224, 224)):
-        with open(json_path, "r") as f:
+
+# --- Classification Dataset ---
+class LlavaClassificationDataset(Dataset):
+    def __init__(self, json_path, processor, collision_object_map=None):
+        with open(json_path, 'r') as f:
             self.data = json.load(f)
-        self.num_frames = num_frames
-        self.transform = transform or transforms.Compose([
-            transforms.Resize((128, 128)),
-            transforms.ToTensor()
-        ])
-        self.concat_resize = concat_resize
+        self.processor = processor
         self.label_map = {"success": 0, "collision": 1, "lane violation": 2}
-        objects = set()
-        for entry in self.data:
-            obj = entry.get("collision_object")
-            if obj:
-                objects.add(obj)
-        self.collision_object_map = {obj: i for i, obj in enumerate(sorted(objects))}
-        print("Collision objects:", self.collision_object_map)
-        print("Number of collision objects:", len(self.collision_object_map))
+        # Build collision object map if not provided
+        if collision_object_map is None:
+            objects = set()
+            for entry in self.data:
+                obj = entry.get("collision_object")
+                if obj:
+                    objects.add(obj)
+            self.collision_object_map = {obj: i for i, obj in enumerate(sorted(objects))}
+        else:
+            self.collision_object_map = collision_object_map
 
     def __len__(self):
         return len(self.data)
 
-    def concatenate_images(self, image_paths):
-        images = [Image.open(p).convert("RGB").resize(self.concat_resize) for p in image_paths]
-        widths, heights = zip(*(img.size for img in images))
-        total_width = sum(widths)
-        max_height = max(heights)
-        new_img = Image.new("RGB", (total_width, max_height))
-        x_offset = 0
-        for img in images:
-            new_img.paste(img, (x_offset, 0))
-            x_offset += img.size[0]
-        return new_img
-
     def __getitem__(self, idx):
-        entry = self.data[idx]
-        images = entry["images"][:self.num_frames]
-        concat_img = self.concatenate_images(images)
-        img_tensor = self.transform(concat_img)
-        prompt = entry["prompt"]
-        expected = entry["expected"]
-        label_id = self.label_map[expected]
-        collision_object = entry.get("collision_object", None)
+        item = self.data[idx]
+        image_path = item['image']
+        image = Image.open(image_path).convert('RGB')
+        prompt = item['prompt']
+        main_label = self.label_map[item['label']]
+        collision_object = item.get('collision_object', None)
         if collision_object:
             collision_object_id = self.collision_object_map[collision_object]
         else:
             collision_object_id = -1
-        return img_tensor, prompt, label_id, collision_object_id
+        inputs = self.processor(text=prompt, images=image, return_tensors="pt")
+        return {
+            'pixel_values': inputs['pixel_values'].squeeze(0),
+            'main_label': torch.tensor(main_label, dtype=torch.long),
+            'collision_object_id': torch.tensor(collision_object_id, dtype=torch.long),
+            'prompt': prompt,
+            'collision_object': collision_object,
+            'image_path': image_path
+        }
 
-def get_llava_lora_model(model_name="llava-hf/llava-1.5-7b-hf"):
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForCausalLM.from_pretrained(model_name)
-    lora_config = LoraConfig(
-        r=8,
-        lora_alpha=32,
-        target_modules=["q_proj", "v_proj"],
-        lora_dropout=0.1,
-        bias="none",
-        task_type="CAUSAL_LM"
-    )
-    model = get_peft_model(model, lora_config)
-    return model, tokenizer
+
+# --- Classification Collate Function ---
+def classification_collate_fn(batch):
+    pixel_values = torch.stack([item['pixel_values'] for item in batch])
+    main_labels = torch.stack([item['main_label'] for item in batch])
+    collision_object_ids = torch.stack([item['collision_object_id'] for item in batch])
+    prompts = [item['prompt'] for item in batch]
+    collision_objects = [item['collision_object'] for item in batch]
+    image_paths = [item['image_path'] for item in batch]
+    return {
+        'pixel_values': pixel_values,
+        'main_labels': main_labels,
+        'collision_object_ids': collision_object_ids,
+        'prompts': prompts,
+        'collision_objects': collision_objects,
+        'image_paths': image_paths
+    }
+
+
+# --- Classification Head ---
+import torch.nn as nn
+class LlavaClassificationHead(nn.Module):
+    def __init__(self, base_model, num_main_classes, num_collision_objects):
+        super().__init__()
+        self.base_model = base_model
+        hidden_size = base_model.config.hidden_size
+        self.main_classifier = nn.Linear(hidden_size, num_main_classes)
+        self.collision_classifier = nn.Linear(hidden_size, num_collision_objects)
+
+    def forward(self, pixel_values):
+        outputs = self.base_model.vision_tower(pixel_values=pixel_values)
+        pooled = outputs.last_hidden_state.mean(dim=1)  # [batch, hidden]
+        main_logits = self.main_classifier(pooled)
+        collision_logits = self.collision_classifier(pooled)
+        return main_logits, collision_logits
+
+class CustomTrainer(Trainer):
+    def get_train_dataloader(self) -> DataLoader:
+        if self.train_dataset is None:
+            raise ValueError("Trainer: training requires a train_dataset.")
+        train_indices = self.train_dataset.indices
+        full_dataset = self.train_dataset.dataset
+        train_labels = [full_dataset.data[i]['main_label'].item() for i in train_indices]
+        class_counts = np.bincount(train_labels)
+        class_weights = 1. / torch.tensor(class_counts, dtype=torch.float)
+        sample_weights = class_weights[train_labels]
+        sampler = WeightedRandomSampler(sample_weights, len(sample_weights))
+        return DataLoader(
+            self.train_dataset,
+            batch_size=self.args.train_batch_size,
+            sampler=sampler,
+            collate_fn=self.data_collator,
+            drop_last=self.args.dataloader_drop_last,
+            num_workers=self.args.dataloader_num_workers,
+            pin_memory=self.args.dataloader_pin_memory,
+        )
+
 
 if __name__ == "__main__":
-    num_frames = 16
-    dataset = LlavaSequenceDataset("llava_input.json", num_frames=num_frames)
-    total_len = len(dataset)
-    indices = list(range(total_len))
-    split = int(0.8 * total_len)
-    train_indices = indices[:split]
-    eval_indices = indices[split:]
+    json_path = "llava_finetune.json"
+    model_id = "llava-hf/llava-1.5-7b-hf"
 
-    train_set = torch.utils.data.Subset(dataset, train_indices)
-    eval_set = torch.utils.data.Subset(dataset, eval_indices)
+    quantization_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.float16,
+    )
 
-    train_loader = DataLoader(train_set, batch_size=1, shuffle=True)  # batch_size=1 for V100
-    eval_loader = DataLoader(eval_set, batch_size=1, shuffle=False)
+    base_model = LlavaForConditionalGeneration.from_pretrained(
+        model_id,
+        quantization_config=quantization_config,
+        device_map="auto",
+    )
+    base_model = prepare_model_for_kbit_training(base_model)
 
-    wandb.init(project="vlm_llava_training", name="run_lora_v100")
+    processor = AutoProcessor.from_pretrained(model_id)
+    processor.tokenizer.padding_side = 'right'
+    processor.tokenizer.pad_token = processor.tokenizer.eos_token
 
-    print("Training set size:", len(train_set))
-    print("Eval set size:", len(eval_set))
+    lora_config = LoraConfig(
+        r=16,
+        lora_alpha=32,
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+        lora_dropout=0.05,
+        bias="none",
+        task_type="CAUSAL_LM",
+    )
+    base_model = get_peft_model(base_model, lora_config)
+    base_model.print_trainable_parameters()
 
-    # Load LLaVA model with LoRA
-    model, tokenizer = get_llava_lora_model()
+    # Build collision object map for dataset and head
+    with open(json_path, 'r') as f:
+        all_data = json.load(f)
+    objects = set()
+    for entry in all_data:
+        obj = entry.get("collision_object")
+        if obj:
+            objects.add(obj)
+    collision_object_map = {obj: i for i, obj in enumerate(sorted(objects))}
+
+    dataset = LlavaClassificationDataset(json_path, processor, collision_object_map)
+
+    def get_traj(entry):
+        return entry['image'].split('/')[1]
+
+    trajs = sorted(set(get_traj(entry) for entry in all_data))
+    last_10_trajs = set(trajs[-10:])
+    val_indices = [i for i, entry in enumerate(all_data) if get_traj(entry) in last_10_trajs]
+    train_indices = [i for i, entry in enumerate(all_data) if get_traj(entry) not in last_10_trajs]
+
+    training_dataset = torch.utils.data.Subset(dataset, train_indices)
+    validation_dataset = torch.utils.data.Subset(dataset, val_indices)
+
+    print(f"Training samples: {len(training_dataset)}")
+    print(f"Validation samples: {len(validation_dataset)}")
+
+    # Classification head
+    num_main_classes = 3
+    num_collision_objects = len(collision_object_map)
+    model = LlavaClassificationHead(base_model, num_main_classes, num_collision_objects)
+
+    training_args = TrainingArguments(
+        output_dir="llava-finetuned-model-sampler",
+        per_device_train_batch_size=1,
+        per_device_eval_batch_size=1,
+        gradient_accumulation_steps=16,
+        num_train_epochs=10,
+        learning_rate=1e-5,
+        weight_decay=0.01,
+        lr_scheduler_type="cosine",
+        warmup_ratio=0.03,
+        logging_steps=10,
+        save_steps=200,
+        eval_steps=200,
+        eval_strategy="steps",
+        save_total_limit=2,
+        load_best_model_at_end=True,
+        metric_for_best_model="eval_loss",
+        greater_is_better=False,
+        fp16=True,
+        gradient_checkpointing=True,
+        report_to="wandb",
+    )
+
+    # Custom training loop for classification
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
-    model.train()
-
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
+    criterion_main = nn.CrossEntropyLoss()
+    criterion_collision = nn.CrossEntropyLoss()
 
-    # Training loop (dual-label logic)
-    criterion_main = torch.nn.CrossEntropyLoss()
-    criterion_collision = torch.nn.CrossEntropyLoss()
-    for batch_idx, batch in enumerate(train_loader):
-        images, prompts, label_ids, collision_object_ids = batch
-        inputs = tokenizer(list(prompts), return_tensors="pt", padding=True, truncation=True).to(device)
-        # Forward pass
-        outputs = model(**inputs)
-        # Main label loss (success, lane violation, collision)
-        main_logits = outputs.logits[:, -1, :3]  # Assume last token, first 3 classes
-        main_loss = criterion_main(main_logits, label_ids.to(device))
-        # Collision object loss (only for collision)
-        collision_mask = (label_ids == 1)  # 1 = collision
-        if collision_mask.any():
-            collision_logits = outputs.logits[:, -1, 3:3+len(dataset.collision_object_map)]
-            collision_labels = collision_object_ids[collision_mask].to(device)
-            collision_logits = collision_logits[collision_mask]
-            collision_loss = criterion_collision(collision_logits, collision_labels)
-            total_loss = main_loss + collision_loss
-        else:
-            total_loss = main_loss
-        total_loss.backward()
-        optimizer.step()
-        optimizer.zero_grad()
-        wandb.log({"train/total_loss": total_loss.item(), "train/main_loss": main_loss.item(), "train/batch_idx": batch_idx})
-        print(f"Batch {batch_idx} total loss: {total_loss.item():.4f}")
-        if batch_idx > 2:
-            break
+    train_loader = DataLoader(training_dataset, batch_size=1, shuffle=True, collate_fn=classification_collate_fn)
+    eval_loader = DataLoader(validation_dataset, batch_size=1, shuffle=False, collate_fn=classification_collate_fn)
 
-    # Eval loop (dual-label logic with wandb logging of prompt, label, image, and response)
-    import torchvision.utils as vutils
-    model.eval()
-    with torch.no_grad():
-        for batch_idx, batch in enumerate(eval_loader):
-            images, prompts, label_ids, collision_object_ids = batch
-            inputs = tokenizer(list(prompts), return_tensors="pt", padding=True, truncation=True).to(device)
-            outputs = model.generate(**inputs, max_new_tokens=32)
-            responses = [tokenizer.decode(out, skip_special_tokens=True) for out in outputs]
-            main_logits = model(**inputs).logits[:, -1, :3]
-            main_loss = criterion_main(main_logits, label_ids.to(device))
-            collision_mask = (label_ids == 1)
+    for epoch in range(training_args.num_train_epochs):
+        model.train()
+        for batch in train_loader:
+            pixel_values = batch['pixel_values'].to(device)
+            main_labels = batch['main_labels'].to(device)
+            collision_object_ids = batch['collision_object_ids'].to(device)
+            main_logits, collision_logits = model(pixel_values)
+            main_loss = criterion_main(main_logits, main_labels)
+            collision_mask = (main_labels == 1)
             if collision_mask.any():
-                collision_logits = model(**inputs).logits[:, -1, 3:3+len(dataset.collision_object_map)]
-                collision_labels = collision_object_ids[collision_mask].to(device)
-                collision_logits = collision_logits[collision_mask]
-                collision_loss = criterion_collision(collision_logits, collision_labels)
+                collision_loss = criterion_collision(collision_logits[collision_mask], collision_object_ids[collision_mask])
                 total_loss = main_loss + collision_loss
             else:
                 total_loss = main_loss
-            # Log image, prompt, label, and response to wandb
-            for i in range(len(prompts)):
-                wandb.log({
-                    "eval/prompt": prompts[i],
-                    "eval/label": label_ids[i].item(),
-                    "eval/image": [wandb.Image(vutils.make_grid(images[i].unsqueeze(0), nrow=1))],
-                    "eval/response": responses[i],
-                    "eval/total_loss": total_loss.item(),
-                    "eval/main_loss": main_loss.item(),
-                    "eval/batch_idx": batch_idx
-                })
-            print(f"Eval batch {batch_idx} total loss: {total_loss.item():.4f}")
-            if batch_idx > 2:
-                break
+            total_loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+        print(f"Epoch {epoch+1} complete.")
+
+    # Save model
+    torch.save(model.state_dict(), "llava-finetuned-classification.pt")
+    print("Training complete. Model saved to 'llava-finetuned-classification.pt'")
+
+    # Eval: generate text output for each sample
+    model.eval()
+    from transformers import AutoTokenizer
+    tokenizer = AutoProcessor.from_pretrained(model_id).tokenizer
+    with torch.no_grad():
+        for batch in eval_loader:
+            pixel_values = batch['pixel_values'].to(device)
+            prompts = batch['prompts']
+            image_paths = batch['image_paths']
+            # Generate text output using base_model
+            for i in range(pixel_values.size(0)):
+                inputs = processor(text=prompts[i], images=Image.open(image_paths[i]).convert('RGB'), return_tensors="pt").to(device)
+                output_ids = base_model.generate(**inputs, max_new_tokens=32)
+                response = tokenizer.decode(output_ids[0], skip_special_tokens=True)
+                print(f"Prompt: {prompts[i]}")
+                print(f"Generated response: {response}")

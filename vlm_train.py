@@ -242,7 +242,8 @@ if __name__ == "__main__":
     torch.save(model.state_dict(), "llava-finetuned-classification.pt")
     print("Training complete. Model saved to 'llava-finetuned-classification.pt'")
 
-    # Eval: generate text output and classification for each sample
+    # Eval: generate text output and classification for each sample, with wandb logging
+    import wandb
     model.eval()
     from transformers import AutoTokenizer
     tokenizer = AutoProcessor.from_pretrained(model_id).tokenizer
@@ -261,9 +262,19 @@ if __name__ == "__main__":
                 response = tokenizer.decode(output_ids[0], skip_special_tokens=True)
                 target_class = batch['main_labels'][i].item()
                 target_collision_object = batch['collision_object_ids'][i].item()
+                pred_class = main_preds[i].item()
+                pred_collision_object = collision_preds[i].item()
                 print(f"Prompt: {prompts[i]}")
                 print(f"Generated response: {response}")
-                print(f"Predicted class: {main_preds[i].item()}")
-                print(f"Predicted collision object: {collision_preds[i].item()}")
+                print(f"Predicted class: {pred_class}")
+                print(f"Predicted collision object: {pred_collision_object}")
                 print(f"Target class: {target_class}")
                 print(f"Target collision object: {target_collision_object}")
+                wandb.log({
+                    "eval/prompt": prompts[i],
+                    "eval/generated_response": response,
+                    "eval/predicted_class": pred_class,
+                    "eval/predicted_collision_object": pred_collision_object,
+                    "eval/target_class": target_class,
+                    "eval/target_collision_object": target_collision_object
+                })

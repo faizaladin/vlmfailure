@@ -191,10 +191,10 @@ if __name__ == "__main__":
 
     training_args = TrainingArguments(
         output_dir="llava-finetuned-model-sampler",
-        per_device_train_batch_size=16,
-        per_device_eval_batch_size=16,
+        per_device_train_batch_size=32,
+        per_device_eval_batch_size=32,
         gradient_accumulation_steps=16,
-        num_train_epochs=10,
+        num_train_epochs=100,
         learning_rate=1e-5,
         weight_decay=0.01,
         lr_scheduler_type="cosine",
@@ -219,9 +219,11 @@ if __name__ == "__main__":
     criterion_main = nn.CrossEntropyLoss()
     criterion_collision = nn.CrossEntropyLoss()
 
-    train_loader = DataLoader(training_dataset, batch_size=1, shuffle=True, collate_fn=sequence_classification_collate_fn)
-    eval_loader = DataLoader(validation_dataset, batch_size=1, shuffle=False, collate_fn=sequence_classification_collate_fn)
+    train_loader = DataLoader(training_dataset, batch_size=32, shuffle=True, collate_fn=sequence_classification_collate_fn)
+    eval_loader = DataLoader(validation_dataset, batch_size=32, shuffle=False, collate_fn=sequence_classification_collate_fn)
 
+    from transformers import AutoTokenizer
+    tokenizer = AutoProcessor.from_pretrained(model_id).tokenizer
     for epoch in range(training_args.num_train_epochs):
         model.train()
         train_iter = tqdm(train_loader, desc=f"Training Epoch {epoch+1}")
@@ -243,44 +245,42 @@ if __name__ == "__main__":
             train_iter.set_postfix({"loss": total_loss.item()})
         print(f"Epoch {epoch+1} complete.")
 
+        # Evaluation after each epoch
+        model.eval()
+        with torch.no_grad():
+            eval_iter = tqdm(eval_loader, desc=f"Evaluating Epoch {epoch+1}")
+            for batch in eval_iter:
+                pixel_values = batch['pixel_values'].to(device)
+                prompts = batch['prompts']
+                image_paths = batch['image_paths']
+                main_logits, collision_logits = model(pixel_values)
+                main_preds = torch.argmax(main_logits, dim=1)
+                collision_preds = torch.argmax(collision_logits, dim=1)
+                # Generate text output using base_model
+                for i in range(pixel_values.size(0)):
+                    inputs = processor(text=prompts[i], images=Image.open(image_paths[i][0]).convert('RGB'), return_tensors="pt").to(device)
+                    output_ids = base_model.generate(**inputs, max_new_tokens=32)
+                    response = tokenizer.decode(output_ids[0], skip_special_tokens=True)
+                    target_class = batch['main_labels'][i].item()
+                    target_collision_object = batch['collision_object_ids'][i].item()
+                    pred_class = main_preds[i].item()
+                    pred_collision_object = collision_preds[i].item()
+                    print(f"Prompt: {prompts[i]}")
+                    print(f"Generated response: {response}")
+                    print(f"Predicted class: {pred_class}")
+                    print(f"Predicted collision object: {pred_collision_object}")
+                    print(f"Target class: {target_class}")
+                    print(f"Target collision object: {target_collision_object}")
+                    wandb.log({
+                        "eval/prompt": prompts[i],
+                        "eval/generated_response": response,
+                        "eval/predicted_class": pred_class,
+                        "eval/predicted_collision_object": pred_collision_object,
+                        "eval/target_class": target_class,
+                        "eval/target_collision_object": target_collision_object,
+                        "epoch": epoch+1
+                    })
+
     # Save model
     torch.save(model.state_dict(), "llava-finetuned-classification.pt")
     print("Training complete. Model saved to 'llava-finetuned-classification.pt'")
-
-    # Eval: generate text output and classification for each sample, with wandb logging
-    import wandb
-    model.eval()
-    from transformers import AutoTokenizer
-    tokenizer = AutoProcessor.from_pretrained(model_id).tokenizer
-    with torch.no_grad():
-        eval_iter = tqdm(eval_loader, desc="Evaluating")
-        for batch in eval_iter:
-            pixel_values = batch['pixel_values'].to(device)
-            prompts = batch['prompts']
-            image_paths = batch['image_paths']
-            main_logits, collision_logits = model(pixel_values)
-            main_preds = torch.argmax(main_logits, dim=1)
-            collision_preds = torch.argmax(collision_logits, dim=1)
-            # Generate text output using base_model
-            for i in range(pixel_values.size(0)):
-                inputs = processor(text=prompts[i], images=Image.open(image_paths[i][0]).convert('RGB'), return_tensors="pt").to(device)
-                output_ids = base_model.generate(**inputs, max_new_tokens=32)
-                response = tokenizer.decode(output_ids[0], skip_special_tokens=True)
-                target_class = batch['main_labels'][i].item()
-                target_collision_object = batch['collision_object_ids'][i].item()
-                pred_class = main_preds[i].item()
-                pred_collision_object = collision_preds[i].item()
-                print(f"Prompt: {prompts[i]}")
-                print(f"Generated response: {response}")
-                print(f"Predicted class: {pred_class}")
-                print(f"Predicted collision object: {pred_collision_object}")
-                print(f"Target class: {target_class}")
-                print(f"Target collision object: {target_collision_object}")
-                wandb.log({
-                    "eval/prompt": prompts[i],
-                    "eval/generated_response": response,
-                    "eval/predicted_class": pred_class,
-                    "eval/predicted_collision_object": pred_collision_object,
-                    "eval/target_class": target_class,
-                    "eval/target_collision_object": target_collision_object
-                })

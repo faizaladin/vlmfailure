@@ -93,7 +93,7 @@ def sequence_classification_collate_fn(batch):
         'main_labels': main_labels,
         'collision_object_ids': collision_object_ids,
         'prompts': prompts,
-        'collision_objects': collision_objects,
+        'collision_objects': collisions_objects,
         'image_paths': image_paths
     }
 
@@ -287,11 +287,8 @@ if __name__ == "__main__":
                     main_preds = torch.argmax(main_logits, dim=1)
                     collision_preds = torch.argmax(collision_logits, dim=1)
                     
-                    eval_table = wandb.Table(columns=[
-                        "Epoch", "Image", "Prompt", 
-                        "Predicted Class", "Target Class",
-                        "Predicted Collision", "Target Collision"
-                    ])
+                    # <-- CHANGED: Create a list for logging images
+                    log_images = []
                     
                     for i in range(len(prompts)):
                         pil_image = dataset.concatenate_images(image_paths_list[i])
@@ -303,17 +300,18 @@ if __name__ == "__main__":
                         pred_coll = inv_collision_map.get(collision_preds[i].item(), "N/A")
                         target_coll = inv_collision_map.get(collision_object_ids[i].item(), "N/A")
                         
-                        eval_table.add_data(
-                            epoch + 1,
-                            wandb.Image(pil_image),
-                            prompts[i],
-                            pred_class,
-                            target_class,
-                            pred_coll,
-                            target_coll
-                        )
+                        # <-- CHANGED: Create a caption for each image
+                        caption = f"""Epoch: {epoch + 1}
+Prompt: {prompts[i]}
+Pred Class: {pred_class} | Target Class: {target_class}
+Pred Collision: {pred_coll} | Target Collision: {target_coll}
+"""
                         
-                    wandb.log({"eval/predictions": eval_table, "epoch": epoch+1})
+                        # <-- CHANGED: Add the wandb.Image with caption to the list
+                        log_images.append(wandb.Image(pil_image, caption=caption))
+
+                    # <-- CHANGED: Log the list of images
+                    wandb.log({"eval/predictions": log_images, "epoch": epoch+1})
                     logged_eval_batch = True
                 # --- END OF NEW LOGGING ---
 

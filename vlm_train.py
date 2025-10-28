@@ -241,6 +241,16 @@ if __name__ == "__main__":
             collision_weight = 2.0  # You can adjust this value
             total_loss = main_loss + collision_weight * collision_loss
             total_loss.backward()
+
+            # Compute and print gradient norm
+            total_norm = 0.0
+            for p in model.parameters():
+                if p.grad is not None:
+                    param_norm = p.grad.data.norm(2)
+                    total_norm += param_norm.item() ** 2
+            total_norm = total_norm ** 0.5
+            print(f"Gradient norm: {total_norm:.4f}")
+
             optimizer.step()
 
             total_train_loss += total_loss.item()

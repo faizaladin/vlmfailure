@@ -198,7 +198,7 @@ if __name__ == "__main__":
         weight_decay=0.01,
         lr_scheduler_type="cosine",
         warmup_ratio=0.03,
-        logging_steps=10, # Log every 10 steps
+        logging_steps=10,
         fp16=True,
         gradient_checkpointing=True,
         gradient_checkpointing_kwargs={'use_reentrant': False}, 
@@ -221,18 +221,10 @@ if __name__ == "__main__":
     inv_label_map = {v: k for k, v in dataset.label_map.items()}
     inv_collision_map = {v: k for k, v in dataset.collision_object_map.items()}
 
-    # --- FIX #2: Initialize the evaluation table ONCE, before the loop ---
-    columns = ["Epoch", "Prompt", "Pred Class", "Target Class", "Pred Collision", "Target Collision"]
-    eval_table = wandb.Table(columns=columns)
-    
-    # --- FIX #1: Add a global step counter ---
-    global_step = 0
-
     for epoch in range(int(training_args.num_train_epochs)):
         model.train()
         train_iter = tqdm(train_loader, desc=f"Training Epoch {epoch+1}")
         total_train_loss = 0
-        
         for batch in train_iter:
             optimizer.zero_grad()
             
@@ -245,54 +237,34 @@ if __name__ == "__main__":
             main_logits, collision_logits = model(pixel_values, input_ids, attention_mask)
             
             main_loss = criterion_main(main_logits, main_labels)
+            
             collision_loss = criterion_collision(collision_logits, collision_object_ids)
             total_loss = main_loss + collision_loss
             
             total_loss.backward()
-            
             # Compute and print gradient norm for classification head
             grad_norm = 0.0
             for param in list(model.main_classifier.parameters()) + list(model.collision_classifier.parameters()):
                 if param.grad is not None:
                     grad_norm += param.grad.norm().item() ** 2
             grad_norm = grad_norm ** 0.5
-            # This print is verbose, you might want to log it to wandb instead
-            # print(f"Gradient norm (classification head): {grad_norm:.4f}")
-            
+            print(f"Gradient norm (classification head): {grad_norm:.4f}")
             optimizer.step()
-            
-            # --- FIX #1: Log batch-level metrics ---
-            if global_step % training_args.logging_steps == 0:
-                wandb.log({
-                    "step": global_step,
-                    "epoch_progress": epoch + (global_step / len(train_loader)),
-                    "train/batch_loss": total_loss.item(),
-                    "train/main_loss": main_loss.item(),
-                    "train/collision_loss": collision_loss.item(),
-                    "train/grad_norm": grad_norm,
-                    "learning_rate": optimizer.param_groups[0]['lr']
-                })
-            
-            global_step += 1
-            # --- End of Fix #1 ---
             
             total_train_loss += total_loss.item()
             train_iter.set_postfix({"loss": total_loss.item(), "grad_norm": grad_norm})
         
         avg_train_loss = total_train_loss / len(train_loader)
         print(f"Epoch {epoch+1} complete. Average Training Loss: {avg_train_loss}")
-        # Log average epoch loss
-        wandb.log({"epoch": epoch+1, "train/avg_epoch_loss": avg_train_loss})
+        wandb.log({"epoch": epoch+1, "train/loss": avg_train_loss})
 
+        model.eval()
         model.eval()
         total_eval_loss = 0
         with torch.no_grad():
             eval_iter = tqdm(eval_loader, desc=f"Evaluating Epoch {epoch+1}")
-            
-            # --- FIX #2: Do NOT re-initialize the table here ---
-            # columns = [...] # REMOVED
-            # eval_table = wandb.Table(columns=columns) # REMOVED
-            
+            columns = ["Epoch", "Prompt", "Pred Class", "Target Class", "Pred Collision", "Target Collision"]
+            eval_table = wandb.Table(columns=columns)
             for batch in eval_iter:
                 pixel_values = batch['pixel_values'].to(device)
                 input_ids = batch['input_ids'].to(device)
@@ -310,14 +282,11 @@ if __name__ == "__main__":
 
                 main_preds = torch.argmax(main_logits, dim=1)
                 collision_preds = torch.argmax(collision_logits, dim=1)
-                
                 for i in range(len(prompts)):
                     pred_class = inv_label_map.get(main_preds[i].item(), "N/A")
                     target_class = inv_label_map.get(main_labels[i].item(), "N/A")
                     pred_coll = inv_collision_map.get(collision_preds[i].item(), "N/A")
                     target_coll = inv_collision_map.get(collision_object_ids[i].item(), "N/A")
-                    
-                    # --- FIX #2: Add data to the single, persistent table ---
                     eval_table.add_data(
                         epoch + 1,
                         prompts[i],
@@ -326,20 +295,14 @@ if __name__ == "__main__":
                         pred_coll,
                         target_coll
                     )
-                    
             avg_eval_loss = total_eval_loss / len(eval_loader)
-            
-            # Log evaluation metrics and the CUMULATIVE table
             wandb.log({
                 "epoch": epoch+1,
                 "eval/loss": avg_eval_loss,
                 "eval/predictions_table": eval_table
             })
-            
         print(f"Epoch {epoch+1} Evaluation Loss: {avg_eval_loss}")
-        
-        # --- FIX #3: Removed the duplicate/redundant log call ---
     
     torch.save(model.state_dict(), "llava-finetuned-classification.pt")
     print("Training complete. Model saved to 'llava-finetuned-classification.pt'")
-    wandb.finish()
+

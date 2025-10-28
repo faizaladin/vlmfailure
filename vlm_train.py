@@ -9,7 +9,7 @@ from tqdm import tqdm
 import wandb
 import torch.nn as nn # <-- Moved import to top
 
-# --- Multi-Image Sequence Dataset ---
+# Llava Dataset 
 class LlavaSequenceClassificationDataset(Dataset):
     def __init__(self, json_path, processor, collision_object_map, num_frames=16):
         with open(json_path, 'r') as f:
@@ -22,10 +22,10 @@ class LlavaSequenceClassificationDataset(Dataset):
     def __len__(self):
         return len(self.data)
 
+    # Sequence of images into one image
     def concatenate_images(self, image_paths, resize=(224, 224)):
         images = [Image.open(p).convert("RGB").resize(resize) for p in image_paths[:self.num_frames]]
         if not images:
-            # Return a blank placeholder image if no paths are provided
             return Image.new("RGB", resize, "white") 
         total_width = sum(img.size[0] for img in images)
         max_height = max(img.size[1] for img in images)
@@ -45,21 +45,20 @@ class LlavaSequenceClassificationDataset(Dataset):
         
         main_label = self.label_map[item['expected']]
         collision_object = item.get('collision_object', None)
-        
-        # <-- CHANGED: Assign "N/A" class for non-collision events
+
+        # If Collision find object
         if main_label == self.label_map["collision"]:
-            # This is a collision event, find the object
             collision_object_id = self.collision_object_map[collision_object]
         else:
             # This is "success" or "lane violation", target is "N/A"
             collision_object_id = self.collision_object_map["N/A"]
 
-        # The processor needs both text and images
+        # Combine input and image
         inputs = self.processor(
             text=prompt, 
             images=concat_img, 
             return_tensors="pt", 
-            padding="max_length", # Pad to a consistent length
+            padding="max_length", 
             max_length=1024,
             truncation=True
         )
@@ -69,13 +68,13 @@ class LlavaSequenceClassificationDataset(Dataset):
             'input_ids': inputs['input_ids'].squeeze(0),
             'attention_mask': inputs['attention_mask'].squeeze(0),
             'main_label': torch.tensor(main_label, dtype=torch.long),
-            'collision_object_id': torch.tensor(collision_object_id, dtype=torch.long), # <-- Will now be N/A index for non-collisions
-            'prompt': prompt, # Return the formatted prompt
+            'collision_object_id': torch.tensor(collision_object_id, dtype=torch.long), 
+            'prompt': prompt, 
             'collision_object': collision_object,
             'image_paths': image_paths
         }
 
-# --- Classification Collate Function ---
+# Converts batch of items into tensors
 def sequence_classification_collate_fn(batch):
     pixel_values = torch.stack([item['pixel_values'] for item in batch])
     input_ids = torch.stack([item['input_ids'] for item in batch])
@@ -93,18 +92,17 @@ def sequence_classification_collate_fn(batch):
         'main_labels': main_labels,
         'collision_object_ids': collision_object_ids,
         'prompts': prompts,
-        'collision_objects': collision_objects, # <-- TYPO FIX: Removed extra 's'
+        'collision_objects': collision_objects, 
         'image_paths': image_paths
     }
 
-# --- Classification Head ---
+# Classification Head (need to classify as success, fail and collision) Freeze at inference
 class LlavaClassificationHead(nn.Module):
     def __init__(self, base_model, num_main_classes, num_collision_objects):
         super().__init__()
         self.base_model = base_model
         hidden_size = self.base_model.language_model.config.hidden_size
         self.main_classifier = nn.Linear(hidden_size, num_main_classes)
-        # num_collision_objects now includes the "N/A" class
         self.collision_classifier = nn.Linear(hidden_size, num_collision_objects)
 
     def forward(self, pixel_values, input_ids, attention_mask):
@@ -121,9 +119,9 @@ class LlavaClassificationHead(nn.Module):
         main_logits = self.main_classifier(pooled_output)
         collision_logits = self.collision_classifier(pooled_output)
         
+        # For loss calculation
         return main_logits, collision_logits
-
-# Removed unused CustomTrainer class
+    
 
 if __name__ == "__main__":
     wandb.init(project="vlm_llava_training", name="vlm_driving_classification")
@@ -161,15 +159,13 @@ if __name__ == "__main__":
     with open(json_path, 'r') as f:
         all_data = json.load(f)
         
-    # <-- CHANGED: Build collision object map WITH "N/A"
+    # All collision objects to select from
     objects = {entry.get("collision_object") for entry in all_data if entry.get("collision_object")}
     sorted_objects = sorted(list(objects))
-    # Start map with real objects
     collision_object_map = {obj: i for i, obj in enumerate(sorted_objects)}
-    # Add "N/A" as the last class
     collision_object_map["N/A"] = len(sorted_objects) 
 
-    # Pass the complete map (including "N/A") to the dataset
+    # Building Dataset
     dataset = LlavaSequenceClassificationDataset(json_path, processor, collision_object_map)
 
     indices = list(range(len(dataset)))
@@ -184,7 +180,6 @@ if __name__ == "__main__":
     print(f"Validation samples: {len(validation_dataset)}")
 
     num_main_classes = 3
-    # <-- CHANGED: This count now includes the "N/A" class
     num_collision_objects = len(collision_object_map) 
     model = LlavaClassificationHead(base_model, num_main_classes, num_collision_objects)
 
@@ -213,15 +208,12 @@ if __name__ == "__main__":
         lr=training_args.learning_rate
     )
     criterion_main = nn.CrossEntropyLoss()
-    # <-- CHANGED: No longer need to ignore index. We train on all samples.
     criterion_collision = nn.CrossEntropyLoss() 
 
     train_loader = DataLoader(training_dataset, batch_size=training_args.per_device_train_batch_size, shuffle=True, collate_fn=sequence_classification_collate_fn)
     eval_loader = DataLoader(validation_dataset, batch_size=training_args.per_device_eval_batch_size, shuffle=False, collate_fn=sequence_classification_collate_fn)
 
-    # --- Get inverse maps for logging readable labels ---
     inv_label_map = {v: k for k, v in dataset.label_map.items()}
-    # This will now correctly include "N/A"
     inv_collision_map = {v: k for k, v in dataset.collision_object_map.items()}
 
     for epoch in range(int(training_args.num_train_epochs)):
@@ -241,8 +233,6 @@ if __name__ == "__main__":
             
             main_loss = criterion_main(main_logits, main_labels)
             
-            # <-- CHANGED: Train collision loss on ALL samples.
-            # Non-collision samples will be trained to predict "N/A".
             collision_loss = criterion_collision(collision_logits, collision_object_ids)
             total_loss = main_loss + collision_loss
             
@@ -256,11 +246,13 @@ if __name__ == "__main__":
         print(f"Epoch {epoch+1} complete. Average Training Loss: {avg_train_loss}")
         wandb.log({"epoch": epoch+1, "train/loss": avg_train_loss})
 
-        # --- Evaluation loop (calculates loss and logs image predictions) ---
         model.eval()
         total_eval_loss = 0
         with torch.no_grad():
             eval_iter = tqdm(eval_loader, desc=f"Evaluating Epoch {epoch+1}")
+            # Create a wandb Table for structured logging
+            columns = ["Epoch", "Prompt", "Image", "Pred Class", "Target Class", "Pred Collision", "Target Collision"]
+            eval_table = wandb.Table(columns=columns)
             for batch in eval_iter:
                 pixel_values = batch['pixel_values'].to(device)
                 input_ids = batch['input_ids'].to(device)
@@ -277,29 +269,29 @@ if __name__ == "__main__":
                 total_loss = main_loss + collision_loss
                 total_eval_loss += total_loss.item()
 
-                # --- WANDB IMAGE LOGGING FOR EVERY BATCH ---
                 main_preds = torch.argmax(main_logits, dim=1)
                 collision_preds = torch.argmax(collision_logits, dim=1)
-                log_images = []
                 for i in range(len(prompts)):
                     pil_image = dataset.concatenate_images(image_paths_list[i])
                     pred_class = inv_label_map.get(main_preds[i].item(), "N/A")
                     target_class = inv_label_map.get(main_labels[i].item(), "N/A")
                     pred_coll = inv_collision_map.get(collision_preds[i].item(), "N/A")
                     target_coll = inv_collision_map.get(collision_object_ids[i].item(), "N/A")
-                    caption = (f"Epoch: {epoch + 1}\n"
-                               f"Prompt: {prompts[i]}\n"
-                               f"Pred Class: {pred_class} | Target Class: {target_class}\n"
-                               f"Pred Collision: {pred_coll} | Target Collision: {target_coll}")
-                    log_images.append(wandb.Image(pil_image, caption=caption))
-                wandb.log({"eval/predictions": log_images, "epoch": epoch+1})
-        # --- END OF LOGGING ---
+                    eval_table.add_data(
+                        epoch + 1,
+                        prompts[i],
+                        wandb.Image(pil_image),
+                        pred_class,
+                        target_class,
+                        pred_coll,
+                        target_coll
+                    )
+            wandb.log({"eval/predictions_table": eval_table, "epoch": epoch+1})
 
         avg_eval_loss = total_eval_loss / len(eval_loader)
         print(f"Epoch {epoch+1} Evaluation Loss: {avg_eval_loss}")
         wandb.log({"epoch": epoch+1, "eval/loss": avg_eval_loss})
     
-    # Save the final model (head and LoRA adapters)
     torch.save(model.state_dict(), "llava-finetuned-classification.pt")
     print("Training complete. Model saved to 'llava-finetuned-classification.pt'")
 

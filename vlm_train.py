@@ -259,8 +259,6 @@ if __name__ == "__main__":
         # --- Evaluation loop (calculates loss and logs image predictions) ---
         model.eval()
         total_eval_loss = 0
-        logged_eval_batch = False
-        
         with torch.no_grad():
             eval_iter = tqdm(eval_loader, desc=f"Evaluating Epoch {epoch+1}")
             for batch in eval_iter:
@@ -275,46 +273,27 @@ if __name__ == "__main__":
                 main_logits, collision_logits = model(pixel_values, input_ids, attention_mask)
 
                 main_loss = criterion_main(main_logits, main_labels)
-                
-                # <-- CHANGED: Calculate collision loss on ALL samples
                 collision_loss = criterion_collision(collision_logits, collision_object_ids)
                 total_loss = main_loss + collision_loss
-                
                 total_eval_loss += total_loss.item()
 
-                # --- NEW WANDB IMAGE LOGGING ---
-                if not logged_eval_batch:
-                    main_preds = torch.argmax(main_logits, dim=1)
-                    collision_preds = torch.argmax(collision_logits, dim=1)
-                    
-                    # <-- CHANGED: Create a list for logging images
-                    log_images = []
-                    
-                    for i in range(len(prompts)):
-                        pil_image = dataset.concatenate_images(image_paths_list[i])
-                        
-                        pred_class = inv_label_map.get(main_preds[i].item(), "N/A")
-                        target_class = inv_label_map.get(main_labels[i].item(), "N/A")
-                        
-                        # This will now correctly show "N/A"
-                        pred_coll = inv_collision_map.get(collision_preds[i].item(), "N/A")
-
-                        target_coll = inv_collision_map.get(collision_object_ids[i].item(), "N/A")
-                        
-                        # <-- CHANGED: Create a caption for each image
-                        caption = f"""Epoch: {epoch + 1}
-                        Prompt: {prompts[i]}
-                        Pred Class: {pred_class} | Target Class: {target_class}
-                        Pred Collision: {pred_coll} | Target Collision: {target_coll}
-                        """
-                        
-                        # <-- CHANGED: Add the wandb.Image with caption to the list
-                        log_images.append(wandb.Image(pil_image, caption=caption))
-
-                    # <-- CHANGED: Log the list of images
-                    wandb.log({"eval/predictions": log_images, "epoch": epoch+1})
-                    logged_eval_batch = True
-                # --- END OF NEW LOGGING ---
+                # --- WANDB IMAGE LOGGING FOR EVERY BATCH ---
+                main_preds = torch.argmax(main_logits, dim=1)
+                collision_preds = torch.argmax(collision_logits, dim=1)
+                log_images = []
+                for i in range(len(prompts)):
+                    pil_image = dataset.concatenate_images(image_paths_list[i])
+                    pred_class = inv_label_map.get(main_preds[i].item(), "N/A")
+                    target_class = inv_label_map.get(main_labels[i].item(), "N/A")
+                    pred_coll = inv_collision_map.get(collision_preds[i].item(), "N/A")
+                    target_coll = inv_collision_map.get(collision_object_ids[i].item(), "N/A")
+                    caption = (f"Epoch: {epoch + 1}\n"
+                               f"Prompt: {prompts[i]}\n"
+                               f"Pred Class: {pred_class} | Target Class: {target_class}\n"
+                               f"Pred Collision: {pred_coll} | Target Collision: {target_coll}")
+                    log_images.append(wandb.Image(pil_image, caption=caption))
+                wandb.log({"eval/predictions": log_images, "epoch": epoch+1})
+        # --- END OF LOGGING ---
 
         avg_eval_loss = total_eval_loss / len(eval_loader)
         print(f"Epoch {epoch+1} Evaluation Loss: {avg_eval_loss}")

@@ -9,6 +9,7 @@ from tqdm import tqdm
 import wandb
 import torch.nn as nn
 import os
+from sklearn.metrics import precision_recall_fscore_support
 
 # ============================================================
 # Llava Dataset
@@ -280,6 +281,8 @@ if __name__ == "__main__":
 
         with torch.no_grad():
             eval_iter = tqdm(eval_loader, desc=f"Evaluating Epoch {epoch+1}")
+            all_true = []
+            all_pred = []
             for batch in eval_iter:
                 pixel_values = batch['pixel_values'].to(device)
                 input_ids = batch['input_ids'].to(device)
@@ -297,6 +300,9 @@ if __name__ == "__main__":
 
                 main_preds = torch.argmax(main_logits, dim=1)
                 collision_preds = torch.argmax(collision_logits, dim=1)
+
+                all_true.extend(main_labels.cpu().numpy().tolist())
+                all_pred.extend(main_preds.cpu().numpy().tolist())
 
                 for i in range(len(prompts)):
                     prompt_clean = str(prompts[i]).replace("\n", " ")[:300]
@@ -326,6 +332,15 @@ if __name__ == "__main__":
                         str(target_coll),
                         wandb_image
                     )
+
+            # Calculate precision, recall, f1 for main class
+            precision, recall, f1, _ = precision_recall_fscore_support(all_true, all_pred, average='macro', zero_division=0)
+            wandb.log({
+                "epoch": epoch + 1,
+                "eval/precision": precision,
+                "eval/recall": recall,
+                "eval/f1": f1
+            })
 
         print(f"Eval table has {len(eval_table.data)} rows")
         avg_eval_loss = total_eval_loss / len(eval_loader)

@@ -184,12 +184,6 @@ if __name__ == "__main__":
     num_main_classes = 3
     num_collision_objects = len(collision_object_map)
     model = LlavaClassificationHead(base_model, num_main_classes, num_collision_objects)
-    # Freeze all parameters except LoRA q_proj and v_proj layers
-    for name, param in model.named_parameters():
-        if ("q_proj" in name or "v_proj" in name or "main_classifier" in name or "collision_classifier" in name):
-            param.requires_grad = True
-        else:
-            param.requires_grad = False
 
     training_args = TrainingArguments(
         output_dir="llava-finetuned-model-sampler",
@@ -206,6 +200,18 @@ if __name__ == "__main__":
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
+
+    print("\n" + "="*50)
+    print("VERIFYING TRAINABLE PARAMETERS:")
+    total_trainable_params = 0
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            print(f"  - Trainable: {name} (Shape: {param.shape}, Dtype: {param.dtype})")
+            total_trainable_params += param.numel()
+    
+    print(f"\nTotal trainable parameters found by this check: {total_trainable_params:,}")
+    print("This number should match the LoRA params (from the log) + your new classifier params.")
+    print("="*50 + "\n")
 
     optimizer = torch.optim.Adam(
         [p for p in model.parameters() if p.requires_grad],

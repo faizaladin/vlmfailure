@@ -149,9 +149,9 @@ if __name__ == "__main__":
     base_model = prepare_model_for_kbit_training(base_model)
 
     lora_config = LoraConfig(
-        r=16,
-        lora_alpha=32,
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+        r=4,  # Lower rank for fewer trainable params
+        lora_alpha=16,  # Lower alpha
+        target_modules=["q_proj", "v_proj"],  # Limit to two modules
         lora_dropout=0.05,
         bias="none",
         task_type="CAUSAL_LM",

@@ -8,7 +8,7 @@ import json
 CSV_PATH = "combined_shuffled/combined_shuffled_reordered.csv"
 FRAMES_ROOT = "combined_shuffled/frames"
 OUT_JSON = "vlm_sequences.json"
-NUM_FRAMES = 16
+NUM_FRAMES = 50
 
  # label_map removed, only use label words
 

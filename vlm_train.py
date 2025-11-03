@@ -9,6 +9,7 @@ from tqdm import tqdm
 import wandb
 import torch.nn as nn
 import os
+from torch.cuda.amp import autocast, GradScaler
 from sklearn.metrics import precision_recall_fscore_support
 
 # ============================================================
@@ -134,16 +135,12 @@ if __name__ == "__main__":
     json_path = "llava_input.json"
     model_id = "llava-hf/llava-1.5-7b-hf"
 
-    quantization_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.float16,
-    )
+    print("Using full precision (fp16/fp32), no quantization.")
+    quantization_config = None
 
     base_model = LlavaForConditionalGeneration.from_pretrained(
-        model_id,
-        quantization_config=quantization_config,
-        device_map="auto",
+    model_id,
+    device_map="auto",
     )
 
     processor = AutoProcessor.from_pretrained(model_id)
@@ -217,6 +214,7 @@ if __name__ == "__main__":
     )
     criterion_main = nn.CrossEntropyLoss()
     criterion_collision = nn.CrossEntropyLoss()
+    scaler = GradScaler()
 
     train_loader = DataLoader(training_dataset, batch_size=training_args.per_device_train_batch_size, shuffle=True, collate_fn=sequence_classification_collate_fn)
     eval_loader = DataLoader(validation_dataset, batch_size=training_args.per_device_eval_batch_size, shuffle=False, collate_fn=sequence_classification_collate_fn)
@@ -234,22 +232,13 @@ if __name__ == "__main__":
             input_ids = batch['input_ids'].to(device)
             attention_mask = batch['attention_mask'].to(device)
             main_labels = batch['main_labels'].to(device)
-            collision_object_ids = batch['collision_object_ids'].to(device)
 
-            main_logits, collision_logits = model(pixel_values, input_ids, attention_mask)
-            main_loss = criterion_main(main_logits, main_labels)
-            # Only use collision loss when target is collision
-            collision_mask = (main_labels == dataset.label_map["collision"])
-            if collision_mask.any():
-                # Only compute collision loss for relevant samples
-                filtered_collision_logits = collision_logits[collision_mask]
-                filtered_collision_object_ids = collision_object_ids[collision_mask]
-                collision_loss = criterion_collision(filtered_collision_logits, filtered_collision_object_ids)
-                collision_weight = 2.0  # You can adjust this value
-                total_loss = main_loss + collision_weight * collision_loss
-            else:
+            with autocast():
+                main_logits, _ = model(pixel_values, input_ids, attention_mask)
+                main_loss = criterion_main(main_logits, main_labels)
                 total_loss = main_loss
-            total_loss.backward()
+
+            scaler.scale(total_loss).backward()
 
             # Compute and print gradient norm
             total_norm = 0.0
@@ -260,7 +249,8 @@ if __name__ == "__main__":
             total_norm = total_norm ** 0.5
             print(f"Gradient norm: {total_norm:.4f}")
 
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
 
             total_train_loss += total_loss.item()
             train_iter.set_postfix({"loss": total_loss.item()})
@@ -288,18 +278,14 @@ if __name__ == "__main__":
                 input_ids = batch['input_ids'].to(device)
                 attention_mask = batch['attention_mask'].to(device)
                 main_labels = batch['main_labels'].to(device)
-                collision_object_ids = batch['collision_object_ids'].to(device)
                 prompts = batch['prompts']
 
-                main_logits, collision_logits = model(pixel_values, input_ids, attention_mask)
+                main_logits, _ = model(pixel_values, input_ids, attention_mask)
                 main_loss = criterion_main(main_logits, main_labels)
-                collision_loss = criterion_collision(collision_logits, collision_object_ids)
-                collision_weight = 2.0  # Use same weight as training
-                total_loss = main_loss + collision_weight * collision_loss
+                total_loss = main_loss
                 total_eval_loss += total_loss.item()
 
                 main_preds = torch.argmax(main_logits, dim=1)
-                collision_preds = torch.argmax(collision_logits, dim=1)
 
                 all_true.extend(main_labels.cpu().numpy().tolist())
                 all_pred.extend(main_preds.cpu().numpy().tolist())
@@ -308,21 +294,19 @@ if __name__ == "__main__":
                     prompt_clean = str(prompts[i]).replace("\n", " ")[:300]
                     pred_class = inv_label_map.get(main_preds[i].item(), "N/A")
                     target_class = inv_label_map.get(main_labels[i].item(), "N/A")
-                    # If model predicts success or lane violation, set pred_coll to N/A
-                    if pred_class in ["success", "lane violation"]:
-                        pred_coll = "N/A"
-                    else:
-                        pred_coll = inv_collision_map.get(collision_preds[i].item(), "N/A")
-                    target_coll = inv_collision_map.get(collision_object_ids[i].item(), "N/A")
-                    # Get image paths for this sample
+                    # Only log main class, collision columns set to N/A
+                    pred_coll = "N/A"
+                    target_coll = "N/A"
                     image_paths = batch['image_paths'][i]
-                    # Reuse the concatenate_images function from the dataset
                     concat_img = None
                     try:
                         concat_img = LlavaSequenceClassificationDataset.concatenate_images(None, image_paths)
                     except Exception as e:
                         concat_img = None
-                    wandb_image = wandb.Image(concat_img) if concat_img is not None else None
+                    wandb_image = None
+                    if concat_img is not None:
+                        import numpy as np
+                        wandb_image = wandb.Image(np.array(concat_img))
                     eval_table.add_data(
                         int(epoch + 1),
                         prompt_clean,

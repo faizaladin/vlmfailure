@@ -155,9 +155,9 @@ if __name__ == "__main__":
     base_model = prepare_model_for_kbit_training(base_model)
 
     lora_config = LoraConfig(
-        r=4,  # Lower rank for fewer trainable params
-        lora_alpha=16,  # Lower alpha
-        target_modules=["q_proj", "v_proj"],  # Limit to two modules
+        r=32,  # Increased rank for more trainable params
+        lora_alpha=64,  # Increased alpha
+        target_modules=["q_proj", "v_proj"],
         lora_dropout=0.05,
         bias="none",
         task_type="CAUSAL_LM",
@@ -244,7 +244,13 @@ if __name__ == "__main__":
                 main_loss = criterion_main(main_logits, main_labels)
                 total_loss = main_loss
 
+
             scaler.scale(total_loss).backward()
+
+            # Unscale gradients for clipping
+            scaler.unscale_(optimizer)
+            # Clip gradients to max norm 1.0
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
             # Compute and print gradient norm
             total_norm = 0.0

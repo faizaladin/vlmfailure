@@ -185,15 +185,12 @@ if __name__ == "__main__":
     num_collision_objects = len(collision_object_map)
     model = LlavaClassificationHead(base_model, num_main_classes, num_collision_objects)
     # Freeze all parameters except LoRA q_proj and v_proj layers
-    # Freeze all parameters
     for name, param in model.named_parameters():
-        param.requires_grad = False
-
-    # Unfreeze only LoRA and the new classifiers
-    for name, param in model.named_parameters():
-        if "lora" in name or "classifier" in name:
+        if ("q_proj" in name or "v_proj" in name or "main_classifier" in name or "collision_classifier" in name):
             param.requires_grad = True
-            
+        else:
+            param.requires_grad = False
+
     training_args = TrainingArguments(
         output_dir="llava-finetuned-model-sampler",
         per_device_train_batch_size=8,

@@ -155,8 +155,8 @@ if __name__ == "__main__":
     base_model = prepare_model_for_kbit_training(base_model)
 
     lora_config = LoraConfig(
-        r=32,  # Increased rank for more trainable params
-        lora_alpha=64,  # Increased alpha
+        r=8,  # Lower rank for more stable gradients
+        lora_alpha=16,  # Lower alpha
         target_modules=["q_proj", "v_proj"],
         lora_dropout=0.05,
         bias="none",

@@ -135,9 +135,8 @@ if __name__ == "__main__":
     model_id = "llava-hf/llava-1.5-7b-hf"
 
     quantization_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.float16,
+        load_in_8bit=True,
+        bnb_8bit_compute_dtype=torch.float16,
     )
 
     base_model = LlavaForConditionalGeneration.from_pretrained(
@@ -154,10 +153,9 @@ if __name__ == "__main__":
     lora_config = LoraConfig(
         r=16,
         lora_alpha=32,
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+        target_modules=["q_proj", "v_proj"],
         lora_dropout=0.05,
         bias="none",
-        task_type="CAUSAL_LM",
     )
     base_model = get_peft_model(base_model, lora_config)
     base_model.print_trainable_parameters()
@@ -186,12 +184,16 @@ if __name__ == "__main__":
     num_main_classes = 3
     num_collision_objects = len(collision_object_map)
     model = LlavaClassificationHead(base_model, num_main_classes, num_collision_objects)
+    # Freeze all parameters except LoRA q_proj and v_proj layers
+    # Freeze all parameters
+    for name, param in model.named_parameters():
+        param.requires_grad = False
 
-    for param in model.main_classifier.parameters():
-        param.requires_grad = True
-    for param in model.collision_classifier.parameters():
-        param.requires_grad = True
-
+    # Unfreeze only LoRA and the new classifiers
+    for name, param in model.named_parameters():
+        if "lora" in name or "classifier" in name:
+            param.requires_grad = True
+            
     training_args = TrainingArguments(
         output_dir="llava-finetuned-model-sampler",
         per_device_train_batch_size=8,
@@ -199,9 +201,6 @@ if __name__ == "__main__":
         gradient_accumulation_steps=4,
         num_train_epochs=100,
         learning_rate=1e-5,
-        weight_decay=0.01,
-        lr_scheduler_type="cosine",
-        warmup_ratio=0.03,
         logging_steps=10,
         fp16=True,
         gradient_checkpointing=True,
@@ -211,7 +210,7 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
 
-    optimizer = torch.optim.AdamW(
+    optimizer = torch.optim.Adam(
         [p for p in model.parameters() if p.requires_grad],
         lr=training_args.learning_rate
     )

@@ -28,7 +28,7 @@ class LlavaSequenceClassificationDataset(Dataset):
     def __len__(self):
         return len(self.data)
 
-    def concatenate_images(self, image_paths, resize=(224, 224)):
+    def concatenate_images(self, image_paths, resize=(112, 112)):
         images = [Image.open(p).convert("RGB").resize(resize) for p in image_paths[:self.num_frames]]
         if not images:
             return Image.new("RGB", resize, "white")

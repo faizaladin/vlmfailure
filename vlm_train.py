@@ -124,21 +124,21 @@ if __name__ == "__main__":
     json_path = "llava_input.json"
     model_id = "llava-hf/llava-1.5-7b-hf"
 
-    # quantization_config = BitsAndBytesConfig(
-    #     load_in_8bit=True,
-    #     bnb_8bit_compute_dtype=torch.float16,
-    # )
+    quantization_config = BitsAndBytesConfig(
+        load_in_8bit=True,
+        bnb_8bit_compute_dtype=torch.float16,
+    )
 
     base_model = LlavaForConditionalGeneration.from_pretrained(
         model_id,
-        # quantization_config=quantization_config,
+        quantization_config=quantization_config,
         device_map="auto",
     )
 
     processor = AutoProcessor.from_pretrained(model_id)
     processor.tokenizer.padding_side = 'right'
     processor.tokenizer.pad_token = processor.tokenizer.eos_token
-    # base_model = prepare_model_for_kbit_training(base_model)
+    base_model = prepare_model_for_kbit_training(base_model)
 
     lora_config = LoraConfig(
         r=16,

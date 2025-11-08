@@ -153,7 +153,7 @@ if __name__ == "__main__":
     with open(json_path, 'r') as f:
         all_data = json.load(f)
 
-    dataset = LlavaSequenceClassificationDataset(json_path, processor, None, num_frames=50)
+    dataset = LlavaSequenceClassificationDataset(json_path, processor, num_frames=50)
 
     indices = list(range(len(dataset)))
     np.random.shuffle(indices)

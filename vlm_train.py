@@ -164,16 +164,30 @@ if __name__ == "__main__":
     training_dataset = torch.utils.data.Subset(dataset, train_indices)
     validation_dataset = torch.utils.data.Subset(dataset, val_indices)
 
-    # Save list of trajectories (image paths) used for eval
+    # Save list of trajectory names (folder/run name) used for eval
     eval_trajectories = []
     for idx in val_indices:
         item = dataset.data[idx]
-        eval_trajectories.append(item.get('images', []))
+        # Extract trajectory name from first image path, e.g. edge_masks/town 3/town3_rainy/lane_violation/run_101/
+        images = item.get('images', [])
+        if images:
+            # Remove frame filename, keep up to run_xxx/
+            parts = images[0].split('/')
+            # Find index of 'run_'
+            run_idx = next((i for i, p in enumerate(parts) if p.startswith('run_')), None)
+            if run_idx is not None:
+                traj_name = '/'.join(parts[:run_idx+1])
+            else:
+                traj_name = '/'.join(parts[:-1])
+            eval_trajectories.append(traj_name)
+        else:
+            eval_trajectories.append('')
     with open('eval_trajectories.json', 'w') as f:
         json.dump(eval_trajectories, f, indent=2)
 
     print(f"Training samples: {len(training_dataset)}")
     print(f"Validation samples: {len(validation_dataset)}")
+
 
     num_main_classes = 2
     model = LlavaClassificationHead(base_model, num_main_classes)
@@ -183,7 +197,7 @@ if __name__ == "__main__":
         per_device_train_batch_size=8,
         per_device_eval_batch_size=8,
         gradient_accumulation_steps=4,
-        num_train_epochs=100,
+        num_train_epochs=15,
         learning_rate=1e-5,
         logging_steps=10,
         fp16=True,
@@ -216,6 +230,10 @@ if __name__ == "__main__":
     eval_loader = DataLoader(validation_dataset, batch_size=training_args.per_device_eval_batch_size, shuffle=False, collate_fn=sequence_classification_collate_fn)
 
     inv_label_map = {v: k for k, v in dataset.label_map.items()}
+
+    # Print the shape of one sample's pixel_values to verify input size
+    sample = next(iter(train_loader))
+    print("Sample pixel_values shape:", sample['pixel_values'].shape)
 
     for epoch in range(int(training_args.num_train_epochs)):
         model.train()

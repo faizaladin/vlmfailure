@@ -86,6 +86,31 @@ if __name__ == "__main__":
     dataset = LlavaSequenceClassificationDataset(processor, num_frames=50)
     label_map = {0: "success", 1: "failure"}
 
+    # Evaluate base model (no classification head) on eval trajectories
+    from sklearn.metrics import precision_recall_fscore_support
+    true_labels = []
+    pred_labels = []
+    label_map = {0: "success", 1: "failure"}
+
+    # Helper to infer label from generated text
+    def infer_label_from_text(text):
+        text_lower = text.lower()
+        if "success" in text_lower:
+            return 0
+        if "failure" in text_lower or "lane violation" in text_lower or "collision" in text_lower:
+            return 1
+        # Default to failure if uncertain
+        return 1
+
+    # Load ground truth labels from llava_input.json
+    with open("llava_input.json", "r") as f:
+        llava_data = json.load(f)
+    # Build a lookup from first image in trajectory to expected label
+    img_to_label = {}
+    for item in llava_data:
+        if item['images']:
+            img_to_label[item['images'][0]] = 0 if item['expected'] == "success" else 1
+
     for traj_idx, image_paths in enumerate(eval_trajectories):
         concat_img = dataset.concatenate_images(image_paths)
         prompt = "USER: <image>\nTrajectory inference ASSISTANT:"
@@ -102,15 +127,21 @@ if __name__ == "__main__":
         attention_mask = inputs['attention_mask'].to(device)
 
         with torch.no_grad():
-            logits, outputs = model(pixel_values, input_ids, attention_mask)
-            pred = torch.argmax(logits, dim=1).item()
-            # Generate text output using base_model's generate method
             gen_ids = base_model.generate(
                 pixel_values=pixel_values,
                 input_ids=input_ids,
                 attention_mask=attention_mask,
-                max_new_tokens=500
+                max_new_tokens=64
             )
             gen_text = processor.batch_decode(gen_ids, skip_special_tokens=True)[0]
-            print(f"Trajectory {traj_idx}: Predicted class = {label_map[pred]}")
-            print(f"Trajectory {traj_idx}: Generated text = {gen_text}\n")
+            pred = infer_label_from_text(gen_text)
+            # Get ground truth label from first image
+            gt = img_to_label.get(image_paths[0], 1)
+            true_labels.append(gt)
+            pred_labels.append(pred)
+            print(f"Trajectory {traj_idx}: GT = {label_map[gt]}, Pred = {label_map[pred]}, Text = {gen_text}")
+
+    precision, recall, f1, _ = precision_recall_fscore_support(true_labels, pred_labels, average='macro', zero_division=0)
+    print(f"\nPrecision: {precision:.4f}")
+    print(f"Recall: {recall:.4f}")
+    print(f"F1 Score: {f1:.4f}")

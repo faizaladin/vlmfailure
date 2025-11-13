@@ -70,7 +70,7 @@ def main():
 	wandb.init(project="vlm-binary-classification", name="vlm-train-run")
 	# Configs
 	metadata_json = 'vlm_data/metadata.json'
-	batch_size = 4
+	batch_size = 2
 	num_epochs = 15
 	lr = 1e-5
 	num_frames = 15
@@ -155,6 +155,7 @@ def main():
 	eval_f1s = []
 
 	for epoch in range(num_epochs):
+	# Save model at the end of each epoch
 		# Training
 		model.train()
 		epoch_losses = []
@@ -195,6 +196,7 @@ def main():
 			"train/accuracy": acc,
 			"epoch": epoch+1
 		})
+		torch.save(model.state_dict(), f"vlm_model_epoch{epoch+1}.pth")
 
 		# Evaluation
 		model.eval()
@@ -234,7 +236,9 @@ def main():
 			"eval/accuracy": eval_acc,
 			"epoch": epoch+1
 		})
-		print(f"Epoch {epoch+1} Train Loss: {train_losses[-1]:.4f} Eval Loss: {eval_losses[-1]:.4f} Train F1: {f1:.4f} Eval F1: {eval_f1:.4f}")
+	print(f"Epoch {epoch+1} Train Loss: {train_losses[-1]:.4f} Eval Loss: {eval_losses[-1]:.4f} Train F1: {f1:.4f} Eval F1: {eval_f1:.4f}")
+	# Save model at the end of each epoch
+	torch.save(model.state_dict(), f"vlm_model_epoch{epoch+1}.pth")
 
 
 	# Save the trained model

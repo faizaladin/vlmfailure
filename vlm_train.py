@@ -67,7 +67,7 @@ def main():
 	batch_size = 2
 	num_epochs = 3
 	lr = 2e-5
-	num_frames = 20
+	num_frames = 15
 
 	# Processor
 	processor = VideoLlavaProcessor.from_pretrained("LanguageBind/Video-LLaVA-7B-hf")
@@ -155,11 +155,18 @@ def main():
 		all_preds = []
 		all_labels = []
 		for batch in train_loader:
+			print("Batch keys:", batch.keys())  # Debug print to find the correct video key
 			labels = batch['label'].to(model.device)
+			# Try both possible keys for video tensor
+			video_tensor = batch.get('videos')
+			if video_tensor is None:
+				video_tensor = batch.get('pixel_values')
+			if video_tensor is None:
+				raise KeyError("No video tensor found in batch. Available keys: {}".format(list(batch.keys())))
 			outputs = model(
 				input_ids=batch['input_ids'].squeeze(1).to(model.device),
 				attention_mask=batch['attention_mask'].squeeze(1).to(model.device),
-				pixel_values_videos=batch['videos'].to(model.device),
+				pixel_values_videos=video_tensor.to(model.device),
 				output_hidden_states=True,
 				return_dict=True
 			)
@@ -196,11 +203,17 @@ def main():
 		eval_labels = []
 		with torch.no_grad():
 			for batch in eval_loader:
+				print("Eval batch keys:", batch.keys())  # Debug print to find the correct video key
 				labels = batch['label'].to(model.device)
+				video_tensor = batch.get('videos')
+				if video_tensor is None:
+					video_tensor = batch.get('pixel_values')
+				if video_tensor is None:
+					raise KeyError("No video tensor found in eval batch. Available keys: {}".format(list(batch.keys())))
 				outputs = model(
 					input_ids=batch['input_ids'].squeeze(1).to(model.device),
 					attention_mask=batch['attention_mask'].squeeze(1).to(model.device),
-					pixel_values_videos=batch['videos'].to(model.device),
+					pixel_values_videos=video_tensor.to(model.device),
 					output_hidden_states=True,
 					return_dict=True
 				)

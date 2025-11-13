@@ -1,153 +1,54 @@
-import json
+
+import av
 import torch
-from PIL import Image
-from transformers import LlavaForConditionalGeneration, AutoProcessor, BitsAndBytesConfig
-from peft import get_peft_model, prepare_model_for_kbit_training, LoraConfig
-import torch.nn as nn
 import numpy as np
+from transformers import VideoLlavaForConditionalGeneration, VideoLlavaProcessor, BitsAndBytesConfig
 
-# ======= Model and Dataset Classes (reuse from train script) =======
-class LlavaSequenceClassificationDataset:
-    def __init__(self, processor, num_frames=50):
-        self.processor = processor
-        self.num_frames = num_frames
+def read_video_pyav(container, indices):
+    '''
+    Decode the video with PyAV decoder.
+    Args:
+        container (`av.container.input.InputContainer`): PyAV container.
+        indices (`list[int]`): List of frame indices to decode.
+    Returns:
+        result (np.ndarray): np array of decoded frames of shape (num_frames, height, width, 3).
+    '''
+    frames = []
+    container.seek(0)
+    for i, frame in enumerate(container.decode(video=0)):
+        if i in indices:
+            frames.append(frame)
+        if len(frames) == len(indices):
+            break
+    return np.stack([x.to_ndarray(format="rgb24") for x in frames])
 
-    def concatenate_images(self, image_paths, resize=(112, 112)):
-        images = [Image.open(p).convert("L").resize(resize) for p in image_paths[:self.num_frames]]
-        if not images:
-            return Image.new("L", resize, 0)
-        total_width = sum(img.size[0] for img in images)
-        max_height = max(img.size[1] for img in images)
-        new_img = Image.new("L", (total_width, max_height))
-        x_offset = 0
-        for img in images:
-            new_img.paste(img, (x_offset, 0))
-            x_offset += img.size[0]
-        return new_img
 
-class LlavaClassificationHead(nn.Module):
-    def __init__(self, base_model, num_main_classes):
-        super().__init__()
-        self.base_model = base_model
-        hidden_size = self.base_model.language_model.config.hidden_size
-        self.main_classifier = nn.Linear(hidden_size, num_main_classes)
-        # Freeze classification head
-        for param in self.main_classifier.parameters():
-            param.requires_grad = False
+# 8-bit quantization config
+quantization_config = BitsAndBytesConfig(
+    load_in_8bit=True,
+    llm_int8_threshold=6.0,
+    llm_int8_has_fp16_weight=False,
+)
 
-    def forward(self, pixel_values, input_ids, attention_mask):
-        outputs = self.base_model(
-            pixel_values=pixel_values,
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            output_hidden_states=True
-        )
-        hidden_states = outputs.hidden_states[-1]
-        pooled_output = hidden_states.mean(dim=1)
-        main_logits = self.main_classifier(pooled_output)
-        return main_logits, outputs
+# Load the model with 8-bit quantization
+model = VideoLlavaForConditionalGeneration.from_pretrained(
+    "LanguageBind/Video-LLaVA-7B-hf",
+    quantization_config=quantization_config,
+    device_map="auto"
+)
+processor = VideoLlavaProcessor.from_pretrained("LanguageBind/Video-LLaVA-7B-hf")
 
-# ======= Inference Logic =======
-if __name__ == "__main__":
-    # Load eval trajectories
-    with open("eval_trajectories.json", "r") as f:
-        eval_trajectories = json.load(f)
 
-    model_id = "llava-hf/llava-1.5-7b-hf"
-    quantization_config = BitsAndBytesConfig(
-        load_in_8bit=True,
-        bnb_8bit_compute_dtype=torch.float16,
-    )
-    base_model = LlavaForConditionalGeneration.from_pretrained(
-        model_id,
-        quantization_config=quantization_config,
-        device_map="auto",
-    )
-    processor = AutoProcessor.from_pretrained(model_id)
-    processor.tokenizer.padding_side = 'right'
-    processor.tokenizer.pad_token = processor.tokenizer.eos_token
-    base_model = prepare_model_for_kbit_training(base_model)
-    lora_config = LoraConfig(
-        r=16,
-        lora_alpha=32,
-        target_modules=["q_proj", "v_proj"],
-        lora_dropout=0.05,
-        bias="none",
-    )
-    base_model = get_peft_model(base_model, lora_config)
+# Load the video as an np.array, sampling uniformly 20 frames
+video_path = "vlm_data/town 2_town2_rainy_collision_run_8.mp4"  # Use your local path
+container = av.open(video_path)
+total_frames = container.streams.video[0].frames
+indices = np.linspace(0, total_frames - 1, 20).astype(int)
+video = read_video_pyav(container, indices)
 
-    # Load trained weights
-    model = LlavaClassificationHead(base_model, num_main_classes=2)
-    model.load_state_dict(torch.load("llava-finetuned-classification.pt", map_location="cpu"))
-    model.eval()
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device)
+# For better results, we recommend to prompt the model in the following format
+prompt = "USER: <video>\nThis is a sequence of edge-masks from an autonomous car's vision controller. This sequence *is* the trajectory.\n\nPredict: **Success** (stays on road) or **Failure** (off-road or collision).\n\nReasoning: Explain *why* based on how the edge lines (curbs, buildings) move. ASSISTANT:"
+inputs = processor(text=prompt, videos=video, return_tensors="pt")
 
-    dataset = LlavaSequenceClassificationDataset(processor, num_frames=50)
-    label_map = {0: "success", 1: "failure"}
-
-    from sklearn.metrics import precision_recall_fscore_support
-    label_map = {0: "success", 1: "failure"}
-
-    # Helper to infer label from generated text
-    def infer_label_from_text(text):
-        text_lower = text.lower()
-        if "success" in text_lower:
-            return 0
-        if "failure" in text_lower or "lane violation" in text_lower or "collision" in text_lower:
-            return 1
-        # Default to failure if uncertain
-        return 1
-
-    # Load ground truth labels from llava_input.json
-    with open("llava_input.json", "r") as f:
-        llava_data = json.load(f)
-    img_to_label = {}
-    for item in llava_data:
-        if item['images']:
-            img_to_label[item['images'][0]] = 0 if item['expected'] == "success" else 1
-
-    # Evaluate only base model
-    true_labels = []
-    base_pred_labels = []
-
-    for traj_idx, image_paths in enumerate(eval_trajectories):
-        concat_img = dataset.concatenate_images(image_paths)
-        prompt = (
-            "USER: <image>\n"
-            "Predict the outcome of this initial trajectory as success or failure. "
-            "Explain your reasoning as to why the trajectory will result in that outcome. "
-            "ASSISTANT:"
-        )
-        inputs = processor(
-            text=prompt,
-            images=concat_img,
-            return_tensors="pt",
-            padding="max_length",
-            max_length=1024,
-            truncation=True
-        )
-        pixel_values = inputs['pixel_values'].to(device)
-        input_ids = inputs['input_ids'].to(device)
-        attention_mask = inputs['attention_mask'].to(device)
-
-        gt = img_to_label.get(image_paths[0], 1)
-        true_labels.append(gt)
-
-        with torch.no_grad():
-            gen_ids = base_model.generate(
-                pixel_values=pixel_values,
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                max_new_tokens=64
-            )
-            gen_text = processor.batch_decode(gen_ids, skip_special_tokens=True)[0]
-            base_pred = infer_label_from_text(gen_text)
-            base_pred_labels.append(base_pred)
-
-        print(f"Trajectory {traj_idx}: GT = {label_map[gt]}, Base Pred = {label_map[base_pred]}, Text = {gen_text}")
-
-    base_precision, base_recall, base_f1, _ = precision_recall_fscore_support(true_labels, base_pred_labels, average='macro', zero_division=0)
-    print(f"\nBase Model - Precision: {base_precision:.4f}")
-    print(f"Base Model - Recall: {base_recall:.4f}")
-    print(f"Base Model - F1 Score: {base_f1:.4f}")
+out = model.generate(**inputs, max_new_tokens=60)
+print(processor.batch_decode(out, skip_special_tokens=True, clean_up_tokenization_spaces=True)[0])

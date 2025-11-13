@@ -70,9 +70,9 @@ def main():
 	wandb.init(project="vlm-binary-classification", name="vlm-train-run")
 	# Configs
 	metadata_json = 'vlm_data/metadata.json'
-	batch_size = 2
-	num_epochs = 3
-	lr = 2e-5
+	batch_size = 8
+	num_epochs = 15
+	lr = 1e-5
 	num_frames = 15
 
 	# Processor
@@ -160,18 +160,17 @@ def main():
 		epoch_losses = []
 		all_preds = []
 		all_labels = []
-		train_iter = tqdm(train_loader, desc=f"Epoch {epoch+1} [Train]", leave=False)
-		for batch in train_loader:
-			# Use the correct key for video tensor
+		train_iter = tqdm(train_loader, desc=f"Epoch {epoch+1} [Train]", leave=True, dynamic_ncols=True)
+		for i, batch in enumerate(train_iter, 1):
 			labels = batch['label'].to(model.device)
 			video_tensor = batch['pixel_values_videos']
 			outputs = model(
-                input_ids=batch['input_ids'].to(model.device),
-                attention_mask=batch['attention_mask'].to(model.device),
-                pixel_values_videos=video_tensor.to(model.device),
-                output_hidden_states=True,
-                return_dict=True
-            )
+				input_ids=batch['input_ids'].to(model.device),
+				attention_mask=batch['attention_mask'].to(model.device),
+				pixel_values_videos=video_tensor.to(model.device),
+				output_hidden_states=True,
+				return_dict=True
+			)
 			logits = model.classification_head(outputs.hidden_states[-1])
 			loss = nn.CrossEntropyLoss()(logits, labels)
 			preds = torch.argmax(logits, dim=1)
@@ -181,10 +180,8 @@ def main():
 			epoch_losses.append(loss.item())
 			all_preds.extend(preds.cpu().numpy())
 			all_labels.extend(labels.cpu().numpy())
-			train_iter.set_postfix(loss=loss.item())
-			# Log batch loss
+			train_iter.set_postfix(batch=i, loss=loss.item())
 			wandb.log({"train/batch_loss": loss.item()})
-		train_losses.append(np.mean(epoch_losses))
 		precision, recall, f1, _ = precision_recall_fscore_support(all_labels, all_preds, average='binary', zero_division=0)
 		acc = accuracy_score(all_labels, all_preds)
 		train_precisions.append(precision)
@@ -205,9 +202,8 @@ def main():
 		eval_preds = []
 		eval_labels = []
 		with torch.no_grad():
-			eval_iter = tqdm(eval_loader, desc=f"Epoch {epoch+1} [Eval]", leave=False)
-			for batch in eval_loader:
-				# Use the correct key for video tensor
+			eval_iter = tqdm(eval_loader, desc=f"Epoch {epoch+1} [Eval]", leave=True, dynamic_ncols=True)
+			for i, batch in enumerate(eval_iter, 1):
 				labels = batch['label'].to(model.device)
 				video_tensor = batch['pixel_values_videos']
 				outputs = model(
@@ -223,8 +219,8 @@ def main():
 				eval_epoch_losses.append(loss.item())
 				eval_preds.extend(preds.cpu().numpy())
 				eval_labels.extend(labels.cpu().numpy())
-				eval_iter.set_postfix(loss=loss.item())
-		eval_losses.append(np.mean(eval_epoch_losses))
+				eval_iter.set_postfix(batch=i, loss=loss.item())
+				eval_iter.set_postfix(batch=i, loss=loss.item())
 		eval_precision, eval_recall, eval_f1, _ = precision_recall_fscore_support(eval_labels, eval_preds, average='binary', zero_division=0)
 		eval_acc = accuracy_score(eval_labels, eval_preds)
 		eval_precisions.append(eval_precision)

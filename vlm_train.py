@@ -163,12 +163,12 @@ def main():
 			labels = batch['label'].to(model.device)
 			video_tensor = batch['pixel_values_videos']
 			outputs = model(
-				input_ids=batch['input_ids'].squeeze(1).to(model.device),
-				attention_mask=batch['attention_mask'].squeeze(1).to(model.device),
-				pixel_values_videos=video_tensor.to(model.device),
-				output_hidden_states=True,
-				return_dict=True
-			)
+                input_ids=batch['input_ids'].to(model.device),
+                attention_mask=batch['attention_mask'].to(model.device),
+                pixel_values_videos=video_tensor.to(model.device),
+                output_hidden_states=True,
+                return_dict=True
+            )
 			logits = model.classification_head(outputs.hidden_states[-1])
 			loss = nn.CrossEntropyLoss()(logits, labels)
 			preds = torch.argmax(logits, dim=1)

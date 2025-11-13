@@ -42,7 +42,9 @@ class VideoClassificationDataset(Dataset):
 
 	def __getitem__(self, idx):
 		item = self.metadata[idx]
-		video = self.read_video_pyav(item['video'])
+		video = self.read_video_pyav(item['video'])  # (num_frames, H, W, C)
+		# Rearrange to (num_frames, C, H, W)
+		video = np.transpose(video, (0, 3, 1, 2))
 		prompt = "USER: <video>\nThis is a video sequence from a car's vision controller. This sequence *is* the trajectory of the car.\n\nPredict: **Success** (stays on road) or **Failure** (off-road or collision).\n\nReasoning: Explain *why* based on how the where the car is heading and what it might collide with. ASSISTANT:"
 		inputs = self.processor(text=prompt, videos=video, return_tensors="pt")
 		label = 1 if item['label'] == 'success' else 0

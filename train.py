@@ -191,6 +191,7 @@ def main():
 			wandb.log({"train/batch_loss": loss.item()})
 		precision, recall, f1, _ = precision_recall_fscore_support(all_labels, all_preds, average='binary', zero_division=0)
 		acc = accuracy_score(all_labels, all_preds)
+		train_losses.append(np.mean(epoch_losses))
 		train_precisions.append(precision)
 		train_recalls.append(recall)
 		train_f1s.append(f1)

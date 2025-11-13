@@ -58,7 +58,7 @@ def main():
 	# Initialize wandb
 	wandb.init(project="vlm-binary-classification", name="vlm-train-run")
 	# Configs
-	metadata_json = 'metadata.json'
+	metadata_json = 'vlm/metadata.json'
 	batch_size = 2
 	num_epochs = 3
 	lr = 2e-5

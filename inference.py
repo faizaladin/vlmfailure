@@ -43,7 +43,7 @@ processor = VideoLlavaProcessor.from_pretrained("LanguageBind/Video-LLaVA-7B-hf"
 video_path = "vlm_data/town 2_town2_rainy_collision_run_8.mp4"  # Use your local path
 container = av.open(video_path)
 total_frames = container.streams.video[0].frames
-indices = np.linspace(0, total_frames - 1, 8).astype(int)
+indices = np.linspace(0, total_frames - 1, 10).astype(int)
 video = read_video_pyav(container, indices)
 
 # For better results, we recommend to prompt the model in the following format

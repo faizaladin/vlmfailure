@@ -47,6 +47,8 @@ class VideoClassificationDataset(Dataset):
 		video = np.transpose(video, (0, 3, 1, 2))
 		prompt = "USER: <video>\nThis is a video sequence from a car's vision controller. This sequence *is* the trajectory of the car.\n\nPredict: **Success** (stays on road) or **Failure** (off-road or collision).\n\nReasoning: Explain *why* based on how the where the car is heading and what it might collide with. ASSISTANT:"
 		inputs = self.processor(text=prompt, videos=video, return_tensors="pt")
+		# Remove batch dimension from processor outputs
+		inputs = {k: v.squeeze(0) if isinstance(v, torch.Tensor) and v.dim() > 0 and v.shape[0] == 1 else v for k, v in inputs.items()}
 		label = 1 if item['label'] == 'success' else 0
 		return {**inputs, 'label': torch.tensor(label, dtype=torch.long)}
 

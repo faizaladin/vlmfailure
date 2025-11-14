@@ -32,6 +32,7 @@ quantization_config = BitsAndBytesConfig(
     llm_int8_has_fp16_weight=False,
 )
 
+from torch import nn
 # Load the model with 8-bit quantization
 model = VideoLlavaForConditionalGeneration.from_pretrained(
     "LanguageBind/Video-LLaVA-7B-hf",
@@ -39,6 +40,20 @@ model = VideoLlavaForConditionalGeneration.from_pretrained(
     device_map="auto"
 )
 processor = VideoLlavaProcessor.from_pretrained("LanguageBind/Video-LLaVA-7B-hf")
+
+# Classification head definition (same as train.py)
+class ClassificationHead(nn.Module):
+    def __init__(self, hidden_size):
+        super().__init__()
+        self.fc = nn.Linear(hidden_size, 2)
+    def forward(self, x):
+        return self.fc(x[:, 0, :])
+
+# Attach and load weights
+hidden_size = model.config.hidden_size if hasattr(model.config, 'hidden_size') else model.config.text_config.hidden_size
+model.classification_head = ClassificationHead(hidden_size).to(model.device)
+model.load_state_dict(torch.load("vlm_model_epoch2.pth", map_location=model.device), strict=False)
+model.eval()
 
 
 
@@ -57,14 +72,9 @@ def get_ground_truth_label(video_path):
 
 
 # Helper to extract predicted label from model output
-def get_predicted_label(output):
-    output_lower = output.lower()
-    if "success" in output_lower:
-        return "success"
-    elif "failure" in output_lower or "collision" in output_lower or "off-road" in output_lower:
-        return "failure"
-    else:
-        return None
+def get_predicted_label_from_logits(logits):
+    pred = torch.argmax(logits, dim=1).item()
+    return "success" if pred == 1 else "failure"
 
 results = []
 y_true = []
@@ -86,15 +96,22 @@ for video_path in video_paths:
         for k, v in inputs.items():
             if isinstance(v, torch.Tensor):
                 inputs[k] = v.to(device)
-        out = model.generate(**inputs, max_new_tokens=500)
-        decoded = processor.batch_decode(out, skip_special_tokens=True, clean_up_tokenization_spaces=True)[0]
+        with torch.no_grad():
+            outputs = model(
+                input_ids=inputs['input_ids'],
+                attention_mask=inputs['attention_mask'],
+                pixel_values_videos=inputs['pixel_values_videos'],
+                output_hidden_states=True,
+                return_dict=True
+            )
+            logits = model.classification_head(outputs.hidden_states[-1])
+            pred_label = get_predicted_label_from_logits(logits)
         gt_label = get_ground_truth_label(video_path)
-        pred_label = get_predicted_label(decoded)
-        results.append({"video": video_path, "output": decoded, "ground_truth": gt_label, "predicted": pred_label})
+        results.append({"video": video_path, "ground_truth": gt_label, "predicted": pred_label})
         if gt_label is not None and pred_label is not None:
             y_true.append(gt_label)
             y_pred.append(pred_label)
-        print(f"{video_path}: {decoded}")
+        print(f"{video_path}: GT={gt_label}, Pred={pred_label}")
     except Exception as e:
         print(f"Error processing {video_path}: {e}")
 

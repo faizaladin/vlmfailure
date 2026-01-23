@@ -8,3 +8,11 @@ The purpose of this repository is to finetune LlaVa 1.5 on trajectories of cars 
 
 To collect data for the VLM finetuning the repository here can be used: https://github.com/faizaladin/Neural-Net-Image-Driving
 
+## How to Use
+
+1. Install the Conda Environment
+<pre>conda env create -f environment.yml
+conda activate myenv
+</pre>
+
+2. Fine-Tune LlaVa 1.5

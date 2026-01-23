@@ -15,5 +15,12 @@ To collect data for the VLM finetuning the repository here can be used: https://
 conda activate myenv
 </pre>
 
-2. Fine-Tune LlaVa 1.5
+2. After collecting the data from the repository above, you will need to format it.
+<pre>python format_data.py</pre>
+
+3. Fine-Tune LlaVa 1.5
 <pre>python train.py</pre>
+
+4. Evaluate on unseen trajectories
+<pre>python inference.py </pre>
+
